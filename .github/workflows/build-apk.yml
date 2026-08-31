@@ -11,74 +11,57 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 저장소 파일 가져오기
-      - name: Checkout
-        uses: actions/checkout@v6
+      # 1. GitHub 저장소 가져오기
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # Java 17 설치
+      # 2. Java 17 설치
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # Android SDK 설치
+      # 3. Android SDK 준비
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
-      # Android API 36 설치
-      - name: Install Android 16 SDK
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      # 4. Android API 36 / Build Tools 설치
+      - name: Install Android SDK 36
+        run: |
+          sdkmanager "platforms;android-36"
+          sdkmanager "build-tools;36.0.0"
 
-      # Gradle 8.13 설치
+      # 5. Gradle 8.13 설치
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
 
-      # 프로젝트 구조 확인
-      - name: Show project structure
+      # 6. 프로젝트 구조 확인
+      - name: Check project files
         run: |
-          echo "===== Repository root ====="
-          pwd
-          echo "===== Files ====="
-          find . -maxdepth 3 -type f | sort
+          echo "===== WatchCollection ====="
+          ls -la WatchCollection
+          echo "===== app ====="
+          ls -la WatchCollection/app
 
-      # settings.gradle 위치를 자동 탐색
-      - name: Find Gradle project
-        id: find_project
-        shell: bash
-        run: |
-          SETTINGS_FILE=$(find . -maxdepth 3 \
-            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-            | head -n 1)
-
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "Gradle 프로젝트를 찾을 수 없습니다."
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-
-          echo "Gradle project found: $PROJECT_DIR"
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-      # APK 빌드
+      # 7. APK 빌드
       - name: Build debug APK
-        working-directory: ${{ steps.find_project.outputs.project_dir }}
-        run: gradle :app:assembleDebug --stacktrace
-
-      # APK 위치 확인
-      - name: Find generated APK
+        working-directory: WatchCollection
         run: |
-          echo "===== Generated APK ====="
-          find . -type f -name "*.apk" -print
+          gradle :app:assembleDebug --stacktrace
 
-      # APK 업로드
+      # 8. 생성된 APK 확인
+      - name: Check generated APK
+        run: |
+          echo "===== APK files ====="
+          find WatchCollection -type f -name "*.apk" -print
+
+      # 9. APK 다운로드용 Artifact 생성
       - name: Upload APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
-          name: WatchCollection-v0.3-debug-apk
-          path: |
-            **/app/build/outputs/apk/debug/*.apk
+          name: WatchCollection-v0.4-debug-apk
+          path: WatchCollection/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
