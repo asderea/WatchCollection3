@@ -57,15 +57,15 @@ jobs:
         run: |
           gradle :app:assembleDebug --stacktrace
 
-      # 만들어진 APK 확인
+      # APK 확인
       - name: Find generated APK
         run: |
           find WatchCollection -type f -name "*.apk" -print
 
-      # APK Artifact 업로드
+      # APK 업로드
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: WatchCollection-v0.5-debug-apk
+          name: WatchCollection-v0.6-debug-apk
           path: WatchCollection/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
