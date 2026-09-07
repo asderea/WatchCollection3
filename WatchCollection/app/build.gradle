@@ -1,0 +1,33 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.watchcollection.app'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.watchcollection.app'
+        minSdk 26
+        targetSdk 36
+        versionCode 7
+        versionName '0.7.0'
+    }
+
+    // 개인용 debug APK도 매 빌드 같은 키로 서명해 이후 버전을 덮어쓸 수 있게 고정합니다.
+    // Play Store 배포용 release key로 사용하면 안 됩니다.
+    signingConfigs {
+        debug {
+            storeFile file('watchcollection-debug.keystore')
+            storePassword 'android'
+            keyAlias 'watchcollectiondebug'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+}
