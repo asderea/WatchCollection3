@@ -33,7 +33,7 @@ jobs:
           sdkmanager "platforms;android-36"
           sdkmanager "build-tools;36.0.0"
 
-      # Gradle 8.13 설치
+      # Gradle 설치
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -57,16 +57,16 @@ jobs:
         working-directory: WatchCollection
         run: gradle :app:assembleDebug --stacktrace
 
-      # APK 생성 여부 확인
+      # APK 확인
       - name: Find generated APK
         run: |
           find WatchCollection -type f -name "*.apk" -print
           test -f WatchCollection/app/build/outputs/apk/debug/app-debug.apk
 
-      # APK Artifact 업로드
+      # APK 업로드
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: WatchCollection-v0.7-debug-apk
+          name: WatchCollection-v0.8-debug-apk
           path: WatchCollection/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
