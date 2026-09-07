@@ -12,28 +12,34 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # 저장소 가져오기
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # Android SDK
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
+      # Android API 36
       - name: Install Android SDK 36
         run: |
           sdkmanager "platforms;android-36"
           sdkmanager "build-tools;36.0.0"
 
+      # Gradle
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.13'
 
+      # 프로젝트 구조 확인
       - name: Check project structure
         run: |
           echo "===== Repository root ====="
@@ -46,18 +52,21 @@ jobs:
           test -f WatchCollection/build.gradle
           test -f WatchCollection/app/build.gradle
 
+      # APK 빌드
       - name: Build debug APK
         working-directory: WatchCollection
         run: gradle :app:assembleDebug --stacktrace
 
+      # APK 생성 확인
       - name: Find generated APK
         run: |
           find WatchCollection -type f -name "*.apk" -print
           test -f WatchCollection/app/build/outputs/apk/debug/app-debug.apk
 
+      # Artifact 업로드
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: WatchCollection-v1.0-debug-apk
+          name: WatchCollection-v1.1-debug-apk
           path: WatchCollection/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
