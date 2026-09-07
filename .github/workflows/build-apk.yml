@@ -27,7 +27,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      # Android API 36 설치
+      # Android API 36 / Build Tools 설치
       - name: Install Android SDK 36
         run: |
           sdkmanager "platforms;android-36"
@@ -42,30 +42,31 @@ jobs:
       # 프로젝트 구조 확인
       - name: Check project structure
         run: |
-          echo "===== Repository ====="
+          echo "===== Repository root ====="
           ls -la
 
           echo "===== WatchCollection ====="
           ls -la WatchCollection
 
-          echo "===== App ====="
-          ls -la WatchCollection/app
+          test -f WatchCollection/settings.gradle
+          test -f WatchCollection/build.gradle
+          test -f WatchCollection/app/build.gradle
 
       # APK 빌드
       - name: Build debug APK
         working-directory: WatchCollection
-        run: |
-          gradle :app:assembleDebug --stacktrace
+        run: gradle :app:assembleDebug --stacktrace
 
-      # APK 확인
+      # APK 생성 여부 확인
       - name: Find generated APK
         run: |
           find WatchCollection -type f -name "*.apk" -print
+          test -f WatchCollection/app/build/outputs/apk/debug/app-debug.apk
 
-      # APK 업로드
+      # APK Artifact 업로드
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: WatchCollection-v0.6-debug-apk
+          name: WatchCollection-v0.7-debug-apk
           path: WatchCollection/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
