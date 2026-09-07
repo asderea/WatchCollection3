@@ -38,8 +38,10 @@ jobs:
         run: |
           echo "===== Repository root ====="
           ls -la
+
           echo "===== WatchCollection ====="
           ls -la WatchCollection
+
           test -f WatchCollection/settings.gradle
           test -f WatchCollection/build.gradle
           test -f WatchCollection/app/build.gradle
@@ -56,6 +58,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: WatchCollection-v1.6-debug-apk
+          name: WatchCollection-v1.7-debug-apk
           path: WatchCollection/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
