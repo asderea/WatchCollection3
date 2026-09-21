@@ -2766,7 +2766,7 @@ public class MainActivity extends Activity {
 
     private String formatWearScore(double score) {
         if (Math.abs(score-Math.rint(score)) < 0.001) return String.format(Locale.KOREA,"%.0f회",score);
-        String v=String.format(Locale.KOREA,"%.2f",score).replaceAll("0+$","").replaceAll("\.$","");
+        String v=String.format(Locale.KOREA,"%.2f",score).replaceAll("0+$","").replaceAll("\\.$","");
         return v+"회";
     }
 
