@@ -84,6 +84,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: WatchCollection-v1.20-debug-apk
+          name: WatchCollection-v1.21-debug-apk
           path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
