@@ -1,0 +1,1080 @@
+package com.watchcollection.app;
+
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class DatabaseHelper extends SQLiteOpenHelper {
+    private static final String DB_NAME = "watch_collection.db";
+    private static final int DB_VERSION = 15;
+
+    public static class AccuracyRow {
+        public long id, watchId;
+        public String watchName = "", date = "", note = "";
+        public double deviationSec, intervalHours, secPerDay;
+    }
+
+    public static class TimegrapherRow {
+        public long id, watchId;
+        public String watchName = "", date = "", position = "", note = "", source = "internal";
+        public int bph;
+        public double rateSecDay, beatErrorMs, amplitudeDeg = Double.NaN;
+        public double liftAngleDeg, signalQuality, durationSeconds;
+    }
+
+
+    public static class PositionAverage {
+        public String position = "";
+        public int count;
+        public double avgRateSecDay = Double.NaN;
+        public double avgBeatErrorMs = Double.NaN;
+        public double avgAmplitudeDeg = Double.NaN;
+        public String latestDate = "";
+    }
+
+    public static class WearRow {
+        public long id, watchId;
+        public int slot = 1;
+        public double wearRatio = 1.0;
+        public String watchName = "", date = "", note = "", imageUrl = "";
+    }
+
+    public static class WearStat {
+        public long watchId;
+        public String watchName = "", imageUrl = "";
+        public double score;
+    }
+
+    public static class CollectionPhotoRow {
+        public long id;
+        public String originalPath = "", displayPath = "";
+        public int displayOrder;
+    }
+
+    public static class RepairRow {
+        public long id, watchId;
+        public String repairDate = "", repairType = "", details = "";
+    }
+
+    public static class WearPhotoRow {
+        public long id, watchId;
+        public String watchName = "", wearDate = "", imagePath = "";
+    }
+
+    public static class HeritageEntryRow {
+        public long id, watchId;
+        public String eventDate = "", watchName = "", watchImage = "", title = "", content = "";
+    }
+
+    public static class HeritagePhotoRow {
+        public long id, entryId;
+        public String imagePath = "";
+        public int displayOrder;
+    }
+
+    public static class ForgottenWatchRow {
+        public Watch watch;
+        public String lastWearDate = "";
+        public String referenceDate = "";
+        public boolean neverWorn;
+        public long daysNotWorn;
+    }
+
+
+    public DatabaseHelper(Context context) { super(context, DB_NAME, null, DB_VERSION); }
+
+    @Override public void onConfigure(SQLiteDatabase db) {
+        super.onConfigure(db);
+        db.setForeignKeyConstraintsEnabled(true);
+    }
+
+    @Override public void onCreate(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE watches (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                "model_name TEXT NOT NULL, brand TEXT, reference_no TEXT, movement TEXT, caliber TEXT," +
+                "diameter_mm TEXT, lug_to_lug_mm TEXT, thickness_mm TEXT, lug_width_mm TEXT," +
+                "power_reserve_hours TEXT, water_resistance TEXT, crystal TEXT, case_material TEXT, warranty_end_date TEXT, purchase_date TEXT," +
+                "source_urls TEXT, representative_image_url TEXT, original_image_url TEXT, calendar_image_url TEXT, caseback_image_url TEXT, caseback_original_image_url TEXT, image_source_url TEXT, notes TEXT, purchase_price TEXT," +
+                "created_at INTEGER NOT NULL)");
+
+        db.execSQL("CREATE TABLE accuracy_records (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, watch_id INTEGER NOT NULL, record_date TEXT NOT NULL," +
+                "deviation_sec REAL NOT NULL, interval_hours REAL NOT NULL, sec_per_day REAL NOT NULL," +
+                "note TEXT, created_at INTEGER NOT NULL," +
+                "FOREIGN KEY(watch_id) REFERENCES watches(id) ON DELETE CASCADE)");
+
+        createTimegrapherTable(db);
+        createWearTable(db);
+
+        db.execSQL("CREATE TABLE straps (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, purchase_url TEXT, maker TEXT, name TEXT NOT NULL, width_mm INTEGER NOT NULL," +
+                "color TEXT, material TEXT, image_path TEXT, buckle TEXT, notes TEXT, created_at INTEGER NOT NULL)");
+
+        db.execSQL("CREATE TABLE collection_photos (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, original_path TEXT, display_path TEXT, display_order INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)");
+        createRepairTable(db);
+        createWearPhotoTable(db);
+        createHeritageTables(db);
+        createForgottenExclusionTable(db);
+    }
+
+
+    private void createTimegrapherTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS timegrapher_records (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, watch_id INTEGER NOT NULL, record_date TEXT NOT NULL," +
+                "bph INTEGER NOT NULL, rate_sec_day REAL NOT NULL, beat_error_ms REAL NOT NULL," +
+                "amplitude_deg REAL, lift_angle_deg REAL NOT NULL, position TEXT NOT NULL," +
+                "signal_quality REAL NOT NULL, duration_seconds REAL NOT NULL, source TEXT NOT NULL DEFAULT 'internal', note TEXT, created_at INTEGER NOT NULL," +
+                "FOREIGN KEY(watch_id) REFERENCES watches(id) ON DELETE CASCADE)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_timegrapher_watch ON timegrapher_records(watch_id)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_timegrapher_date ON timegrapher_records(record_date)");
+    }
+
+    private void createWearTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE wear_records (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, watch_id INTEGER NOT NULL," +
+                "watch_name_snapshot TEXT NOT NULL DEFAULT ''," +
+                "representative_image_snapshot TEXT NOT NULL DEFAULT ''," +
+                "calendar_image_snapshot TEXT NOT NULL DEFAULT ''," +
+                "wear_date TEXT NOT NULL, slot INTEGER NOT NULL DEFAULT 1, wear_ratio REAL NOT NULL DEFAULT 1.0, note TEXT, created_at INTEGER NOT NULL," +
+                "UNIQUE(wear_date, slot))");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_wear_date ON wear_records(wear_date)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_wear_watch ON wear_records(watch_id)");
+    }
+
+    private void createRepairTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS repair_records (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, watch_id INTEGER NOT NULL, repair_date TEXT NOT NULL," +
+                "repair_type TEXT NOT NULL, details TEXT, created_at INTEGER NOT NULL," +
+                "FOREIGN KEY(watch_id) REFERENCES watches(id) ON DELETE CASCADE)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_repair_watch ON repair_records(watch_id)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_repair_date ON repair_records(repair_date)");
+    }
+
+    private void createWearPhotoTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS wear_photos (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, watch_id INTEGER NOT NULL," +
+                "watch_name_snapshot TEXT NOT NULL DEFAULT '', wear_date TEXT NOT NULL," +
+                "image_path TEXT NOT NULL, created_at INTEGER NOT NULL)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_wear_photos_watch ON wear_photos(watch_id)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_wear_photos_date ON wear_photos(wear_date)");
+    }
+
+    private void createHeritageTables(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS heritage_entries (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, event_date TEXT NOT NULL, watch_id INTEGER NOT NULL," +
+                "watch_name_snapshot TEXT NOT NULL DEFAULT '', watch_image_snapshot TEXT NOT NULL DEFAULT ''," +
+                "title TEXT NOT NULL, content TEXT, created_at INTEGER NOT NULL)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_heritage_date ON heritage_entries(event_date)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_heritage_watch ON heritage_entries(watch_id)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS heritage_photos (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER NOT NULL, image_path TEXT NOT NULL," +
+                "display_order INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL," +
+                "FOREIGN KEY(entry_id) REFERENCES heritage_entries(id) ON DELETE CASCADE)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_heritage_photo_entry ON heritage_photos(entry_id)");
+    }
+
+    private void createForgottenExclusionTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS forgotten_watch_exclusions (" +
+                "watch_id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL)");
+    }
+
+    @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE watches ADD COLUMN representative_image_url TEXT DEFAULT ''");
+            db.execSQL("ALTER TABLE watches ADD COLUMN image_source_url TEXT DEFAULT ''");
+            db.execSQL("CREATE TABLE IF NOT EXISTS straps (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, width_mm INTEGER NOT NULL," +
+                    "color TEXT, material TEXT, image_path TEXT, buckle TEXT, notes TEXT, created_at INTEGER NOT NULL)");
+        }
+        if (oldVersion < 3) {
+            migrateWearRecordsToV3(db);
+        }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE straps ADD COLUMN maker TEXT DEFAULT ''");
+        }
+        if (oldVersion < 5) {
+            db.execSQL("ALTER TABLE watches ADD COLUMN original_image_url TEXT DEFAULT ''");
+            createTimegrapherTable(db);
+        }
+        if (oldVersion >= 5 && oldVersion < 6) {
+            db.execSQL("ALTER TABLE timegrapher_records ADD COLUMN source TEXT NOT NULL DEFAULT 'internal'");
+        }
+        if (oldVersion < 7) {
+            db.execSQL("ALTER TABLE watches ADD COLUMN warranty_end_date TEXT DEFAULT ''");
+        }
+        if (oldVersion < 8) {
+            db.execSQL("ALTER TABLE watches ADD COLUMN purchase_price TEXT DEFAULT ''");
+            db.execSQL("CREATE TABLE IF NOT EXISTS collection_photos (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, original_path TEXT, display_path TEXT, display_order INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)");
+        }
+        if (oldVersion < 9) {
+            db.execSQL("ALTER TABLE watches ADD COLUMN calendar_image_url TEXT DEFAULT ''");
+        }
+        if (oldVersion < 10) {
+            migrateWearRecordsToV10(db);
+        }
+        if (oldVersion < 11) {
+            if(!hasColumn(db,"watches","purchase_date"))
+                db.execSQL("ALTER TABLE watches ADD COLUMN purchase_date TEXT DEFAULT ''");
+            if(!hasColumn(db,"wear_records","wear_ratio"))
+                db.execSQL("ALTER TABLE wear_records ADD COLUMN wear_ratio REAL NOT NULL DEFAULT 1.0");
+            db.execSQL("UPDATE wear_records SET wear_ratio=0.5 WHERE wear_date IN (SELECT wear_date FROM wear_records GROUP BY wear_date HAVING COUNT(*)>=2)");
+            createRepairTable(db);
+        }
+        if (oldVersion < 12) {
+            createWearPhotoTable(db);
+        }
+        if (oldVersion < 13) {
+            if(!hasColumn(db,"watches","caseback_image_url"))
+                db.execSQL("ALTER TABLE watches ADD COLUMN caseback_image_url TEXT DEFAULT ''");
+            if(!hasColumn(db,"watches","caseback_original_image_url"))
+                db.execSQL("ALTER TABLE watches ADD COLUMN caseback_original_image_url TEXT DEFAULT ''");
+        }
+        if (oldVersion < 14) {
+            if(!hasColumn(db,"straps","purchase_url"))
+                db.execSQL("ALTER TABLE straps ADD COLUMN purchase_url TEXT DEFAULT ''");
+        }
+        if (oldVersion < 15) {
+            createHeritageTables(db);
+            createForgottenExclusionTable(db);
+        }
+    }
+
+    private boolean hasColumn(SQLiteDatabase db,String table,String column) {
+        Cursor c=db.rawQuery("PRAGMA table_info("+table+")",null);
+        try {
+            while(c.moveToNext()) {
+                int idx=c.getColumnIndex("name");
+                if(idx>=0 && column.equalsIgnoreCase(c.getString(idx))) return true;
+            }
+        } finally { c.close(); }
+        return false;
+    }
+
+    private void migrateWearRecordsToV3(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE wear_records RENAME TO wear_records_v2_backup");
+        createWearTable(db);
+        db.execSQL("INSERT INTO wear_records(id,watch_id,wear_date,slot,note,created_at) " +
+                "SELECT id,watch_id,wear_date,1,note,created_at FROM wear_records_v2_backup");
+        db.execSQL("DROP TABLE wear_records_v2_backup");
+    }
+
+    private void migrateWearRecordsToV10(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE wear_records RENAME TO wear_records_v9_backup");
+        createWearTable(db);
+        db.execSQL("INSERT INTO wear_records(" +
+                "id,watch_id,watch_name_snapshot,representative_image_snapshot,calendar_image_snapshot," +
+                "wear_date,slot,note,created_at) " +
+                "SELECT r.id,r.watch_id," +
+                "COALESCE(w.model_name,'')," +
+                "COALESCE(w.representative_image_url,'')," +
+                "COALESCE(NULLIF(w.calendar_image_url,''),w.representative_image_url,'')," +
+                "r.wear_date,r.slot,r.note,r.created_at " +
+                "FROM wear_records_v9_backup r LEFT JOIN watches w ON w.id=r.watch_id");
+        db.execSQL("DROP TABLE wear_records_v9_backup");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_wear_date ON wear_records(wear_date)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_wear_watch ON wear_records(watch_id)");
+    }
+
+    public long saveWatch(Watch w) {
+        ContentValues v = watchValues(w);
+        SQLiteDatabase db = getWritableDatabase();
+        if (w.id > 0) {
+            db.update("watches", v, "id=?", new String[]{String.valueOf(w.id)});
+            return w.id;
+        }
+        v.put("created_at", System.currentTimeMillis());
+        return db.insert("watches", null, v);
+    }
+
+    private ContentValues watchValues(Watch w) {
+        ContentValues v = new ContentValues();
+        v.put("model_name", w.modelName); v.put("brand", w.brand); v.put("reference_no", w.referenceNo);
+        v.put("movement", w.movement); v.put("caliber", w.caliber); v.put("diameter_mm", w.diameterMm);
+        v.put("lug_to_lug_mm", w.lugToLugMm); v.put("thickness_mm", w.thicknessMm); v.put("lug_width_mm", w.lugWidthMm);
+        v.put("power_reserve_hours", w.powerReserveHours); v.put("water_resistance", w.waterResistance);
+        v.put("crystal", w.crystal); v.put("case_material", w.caseMaterial); v.put("warranty_end_date", w.warrantyEndDate); v.put("purchase_date", w.purchaseDate); v.put("source_urls", w.sourceUrls);
+        v.put("representative_image_url", w.representativeImageUrl); v.put("original_image_url", w.originalImageUrl);
+        v.put("calendar_image_url", w.calendarImageUrl);
+        v.put("caseback_image_url", w.casebackImageUrl);
+        v.put("caseback_original_image_url", w.casebackOriginalImageUrl);
+        v.put("image_source_url", w.imageSourceUrl);
+        v.put("notes", w.notes);
+        v.put("purchase_price", w.purchasePrice);
+        return v;
+    }
+
+    public List<Watch> getWatches() {
+        List<Watch> list = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery("SELECT * FROM watches ORDER BY brand, model_name", null);
+        try { while (c.moveToNext()) list.add(readWatch(c)); } finally { c.close(); }
+        return list;
+    }
+
+    public Watch getWatch(long id) {
+        Cursor c = getReadableDatabase().rawQuery("SELECT * FROM watches WHERE id=?", new String[]{String.valueOf(id)});
+        try { return c.moveToFirst() ? readWatch(c) : null; } finally { c.close(); }
+    }
+
+    private Watch readWatch(Cursor c) {
+        Watch w = new Watch();
+        w.id = c.getLong(c.getColumnIndexOrThrow("id"));
+        w.modelName=s(c,"model_name"); w.brand=s(c,"brand"); w.referenceNo=s(c,"reference_no");
+        w.movement=s(c,"movement"); w.caliber=s(c,"caliber"); w.diameterMm=s(c,"diameter_mm");
+        w.lugToLugMm=s(c,"lug_to_lug_mm"); w.thicknessMm=s(c,"thickness_mm"); w.lugWidthMm=s(c,"lug_width_mm");
+        w.powerReserveHours=s(c,"power_reserve_hours"); w.waterResistance=s(c,"water_resistance");
+        w.crystal=s(c,"crystal"); w.caseMaterial=s(c,"case_material"); w.warrantyEndDate=s(c,"warranty_end_date"); w.purchaseDate=s(c,"purchase_date"); w.sourceUrls=s(c,"source_urls");
+        w.representativeImageUrl=s(c,"representative_image_url"); w.originalImageUrl=s(c,"original_image_url");
+        w.calendarImageUrl=s(c,"calendar_image_url");
+        w.casebackImageUrl=s(c,"caseback_image_url");
+        w.casebackOriginalImageUrl=s(c,"caseback_original_image_url");
+        w.imageSourceUrl=s(c,"image_source_url"); w.notes=s(c,"notes"); w.purchasePrice=s(c,"purchase_price");
+        return w;
+    }
+
+    public void deleteWatch(long id) {
+        SQLiteDatabase db=getWritableDatabase();
+        db.delete("forgotten_watch_exclusions","watch_id=?",new String[]{String.valueOf(id)});
+        db.delete("watches", "id=?", new String[]{String.valueOf(id)});
+    }
+
+    public void updateCasebackImages(long watchId, String originalPath, String displayPath) {
+        ContentValues v = new ContentValues();
+        v.put("caseback_original_image_url", originalPath == null ? "" : originalPath);
+        v.put("caseback_image_url", displayPath == null ? "" : displayPath);
+        getWritableDatabase().update("watches", v, "id=?", new String[]{String.valueOf(watchId)});
+    }
+
+
+    public void updateCalendarImagePath(long watchId, String path) {
+        ContentValues v = new ContentValues();
+        v.put("calendar_image_url", path == null ? "" : path);
+        getWritableDatabase().update("watches", v, "id=?", new String[]{String.valueOf(watchId)});
+    }
+
+    public long addAccuracy(long watchId, String date, double deviationSec, double intervalHours, String note) {
+        double safeHours = intervalHours <= 0 ? 24.0 : intervalHours;
+        ContentValues v = new ContentValues();
+        v.put("watch_id", watchId); v.put("record_date", date); v.put("deviation_sec", deviationSec);
+        v.put("interval_hours", safeHours); v.put("sec_per_day", deviationSec * 24.0 / safeHours);
+        v.put("note", note); v.put("created_at", System.currentTimeMillis());
+        return getWritableDatabase().insert("accuracy_records", null, v);
+    }
+
+    public List<AccuracyRow> getAccuracyRows(int limit) {
+        List<AccuracyRow> list = new ArrayList<>();
+        String sql = "SELECT a.*, w.model_name FROM accuracy_records a JOIN watches w ON w.id=a.watch_id " +
+                "ORDER BY a.record_date DESC, a.id DESC LIMIT " + Math.max(1, limit);
+        Cursor c = getReadableDatabase().rawQuery(sql, null);
+        try { while (c.moveToNext()) list.add(readAccuracy(c)); } finally { c.close(); }
+        return list;
+    }
+
+    public List<AccuracyRow> getAccuracyRowsForWatch(long watchId, int limit) {
+        List<AccuracyRow> list = new ArrayList<>();
+        String sql = "SELECT a.*, w.model_name FROM accuracy_records a JOIN watches w ON w.id=a.watch_id " +
+                "WHERE a.watch_id=? ORDER BY a.record_date ASC, a.id ASC LIMIT " + Math.max(1, limit);
+        Cursor c = getReadableDatabase().rawQuery(sql, new String[]{String.valueOf(watchId)});
+        try { while (c.moveToNext()) list.add(readAccuracy(c)); } finally { c.close(); }
+        return list;
+    }
+
+    private AccuracyRow readAccuracy(Cursor c) {
+        AccuracyRow r = new AccuracyRow();
+        r.id=c.getLong(c.getColumnIndexOrThrow("id")); r.watchId=c.getLong(c.getColumnIndexOrThrow("watch_id"));
+        r.watchName=s(c,"model_name"); r.date=s(c,"record_date"); r.deviationSec=c.getDouble(c.getColumnIndexOrThrow("deviation_sec"));
+        r.intervalHours=c.getDouble(c.getColumnIndexOrThrow("interval_hours")); r.secPerDay=c.getDouble(c.getColumnIndexOrThrow("sec_per_day")); r.note=s(c,"note");
+        return r;
+    }
+
+    public double averageSecPerDay(long watchId) {
+        Cursor tg = getReadableDatabase().rawQuery("SELECT AVG(rate_sec_day) FROM timegrapher_records WHERE watch_id=?", new String[]{String.valueOf(watchId)});
+        try {
+            if (tg.moveToFirst() && !tg.isNull(0)) return tg.getDouble(0);
+        } finally { tg.close(); }
+        // v0.6 이전 수동 기록은 삭제하지 않고 평균 표시의 fallback으로만 보존합니다.
+        Cursor c = getReadableDatabase().rawQuery("SELECT AVG(sec_per_day) FROM accuracy_records WHERE watch_id=?", new String[]{String.valueOf(watchId)});
+        try { return c.moveToFirst() && !c.isNull(0) ? c.getDouble(0) : Double.NaN; } finally { c.close(); }
+    }
+
+    public long addTimegrapherRecord(long watchId, String date, int bph, double rateSecDay,
+                                     double beatErrorMs, double amplitudeDeg, double liftAngleDeg,
+                                     String position, double signalQuality, double durationSeconds, String note) {
+        return addTimegrapherRecord(watchId, date, bph, rateSecDay, beatErrorMs, amplitudeDeg,
+                liftAngleDeg, position, signalQuality, durationSeconds, note, "internal");
+    }
+
+    public long addTimegrapherRecord(long watchId, String date, int bph, double rateSecDay,
+                                     double beatErrorMs, double amplitudeDeg, double liftAngleDeg,
+                                     String position, double signalQuality, double durationSeconds,
+                                     String note, String source) {
+        ContentValues v = new ContentValues();
+        v.put("watch_id", watchId); v.put("record_date", date); v.put("bph", bph);
+        v.put("rate_sec_day", rateSecDay); v.put("beat_error_ms", beatErrorMs);
+        if (Double.isNaN(amplitudeDeg)) v.putNull("amplitude_deg"); else v.put("amplitude_deg", amplitudeDeg);
+        v.put("lift_angle_deg", liftAngleDeg); v.put("position", position == null ? "Dial up" : position);
+        v.put("signal_quality", signalQuality); v.put("duration_seconds", durationSeconds);
+        v.put("source", source == null || source.trim().isEmpty() ? "internal" : source.trim());
+        v.put("note", note); v.put("created_at", System.currentTimeMillis());
+        return getWritableDatabase().insert("timegrapher_records", null, v);
+    }
+
+    public long addWatchAccuracyMeterRecord(long watchId, String date, int bph, double rateSecDay,
+                                            double beatErrorMs, double amplitudeDeg, String position, String note) {
+        return addTimegrapherRecord(watchId, date, bph, rateSecDay, beatErrorMs, amplitudeDeg,
+                0.0, position, 0.0, 0.0, note, "watch_accuracy_meter");
+    }
+
+    public List<TimegrapherRow> getTimegrapherRows(int limit) {
+        List<TimegrapherRow> list = new ArrayList<>();
+        String sql = "SELECT t.*,w.model_name FROM timegrapher_records t JOIN watches w ON w.id=t.watch_id " +
+                "ORDER BY t.id DESC LIMIT " + Math.max(1, limit);
+        Cursor c = getReadableDatabase().rawQuery(sql, null);
+        try { while (c.moveToNext()) list.add(readTimegrapher(c)); } finally { c.close(); }
+        return list;
+    }
+
+    public List<TimegrapherRow> getTimegrapherRowsForWatch(long watchId, int limit) {
+        List<TimegrapherRow> list = new ArrayList<>();
+        String sql = "SELECT t.*,w.model_name FROM timegrapher_records t JOIN watches w ON w.id=t.watch_id " +
+                "WHERE t.watch_id=? ORDER BY t.id DESC LIMIT " + Math.max(1, limit);
+        Cursor c = getReadableDatabase().rawQuery(sql, new String[]{String.valueOf(watchId)});
+        try { while (c.moveToNext()) list.add(readTimegrapher(c)); } finally { c.close(); }
+        return list;
+    }
+
+    public void deleteTimegrapherRecord(long id) {
+        getWritableDatabase().delete("timegrapher_records", "id=?", new String[]{String.valueOf(id)});
+    }
+
+    public List<PositionAverage> getPositionAveragesForWatch(long watchId) {
+        List<PositionAverage> list = new ArrayList<>();
+        String sql = "SELECT position, COUNT(*) AS n, AVG(rate_sec_day) AS avg_rate, " +
+                "AVG(beat_error_ms) AS avg_beat, AVG(amplitude_deg) AS avg_amp, MAX(record_date) AS latest_date " +
+                "FROM timegrapher_records WHERE watch_id=? GROUP BY position " +
+                "ORDER BY CASE position WHEN 'Dial up' THEN 1 WHEN 'Dial down' THEN 2 WHEN '12 Up' THEN 3 " +
+                "WHEN '9 Up' THEN 4 WHEN '6 Up' THEN 5 WHEN '3 Up' THEN 6 ELSE 7 END";
+        Cursor c = getReadableDatabase().rawQuery(sql, new String[]{String.valueOf(watchId)});
+        try {
+            while (c.moveToNext()) {
+                PositionAverage r = new PositionAverage();
+                r.position = c.isNull(0) ? "" : c.getString(0);
+                r.count = c.getInt(1);
+                r.avgRateSecDay = c.isNull(2) ? Double.NaN : c.getDouble(2);
+                r.avgBeatErrorMs = c.isNull(3) ? Double.NaN : c.getDouble(3);
+                r.avgAmplitudeDeg = c.isNull(4) ? Double.NaN : c.getDouble(4);
+                r.latestDate = c.isNull(5) ? "" : c.getString(5);
+                list.add(r);
+            }
+        } finally { c.close(); }
+        return list;
+    }
+
+    public double averageTimegrapherRateForWatch(long watchId) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT AVG(rate_sec_day) FROM timegrapher_records WHERE watch_id=?",
+                new String[]{String.valueOf(watchId)});
+        try { return c.moveToFirst() && !c.isNull(0) ? c.getDouble(0) : Double.NaN; } finally { c.close(); }
+    }
+
+    public int getTimegrapherRecordCountForWatch(long watchId) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM timegrapher_records WHERE watch_id=?",
+                new String[]{String.valueOf(watchId)});
+        try { return c.moveToFirst() ? c.getInt(0) : 0; } finally { c.close(); }
+    }
+
+    public int getTimegrapherRecordCountForWatchBySource(long watchId, String source) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM timegrapher_records WHERE watch_id=? AND source=?",
+                new String[]{String.valueOf(watchId), source == null ? "internal" : source});
+        try { return c.moveToFirst() ? c.getInt(0) : 0; } finally { c.close(); }
+    }
+
+    public double averageBeatErrorForWatch(long watchId) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT AVG(beat_error_ms) FROM timegrapher_records WHERE watch_id=?",
+                new String[]{String.valueOf(watchId)});
+        try { return c.moveToFirst() && !c.isNull(0) ? c.getDouble(0) : Double.NaN; } finally { c.close(); }
+    }
+
+    public double averageAmplitudeForWatch(long watchId) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT AVG(amplitude_deg) FROM timegrapher_records WHERE watch_id=? AND amplitude_deg IS NOT NULL",
+                new String[]{String.valueOf(watchId)});
+        try { return c.moveToFirst() && !c.isNull(0) ? c.getDouble(0) : Double.NaN; } finally { c.close(); }
+    }
+
+    private TimegrapherRow readTimegrapher(Cursor c) {
+        TimegrapherRow r = new TimegrapherRow();
+        r.id=c.getLong(c.getColumnIndexOrThrow("id")); r.watchId=c.getLong(c.getColumnIndexOrThrow("watch_id"));
+        r.watchName=s(c,"model_name"); r.date=s(c,"record_date"); r.position=s(c,"position"); r.note=s(c,"note");
+        r.bph=c.getInt(c.getColumnIndexOrThrow("bph")); r.rateSecDay=c.getDouble(c.getColumnIndexOrThrow("rate_sec_day"));
+        r.beatErrorMs=c.getDouble(c.getColumnIndexOrThrow("beat_error_ms"));
+        int ai=c.getColumnIndexOrThrow("amplitude_deg"); r.amplitudeDeg=c.isNull(ai)?Double.NaN:c.getDouble(ai);
+        r.liftAngleDeg=c.getDouble(c.getColumnIndexOrThrow("lift_angle_deg"));
+        r.signalQuality=c.getDouble(c.getColumnIndexOrThrow("signal_quality"));
+        r.durationSeconds=c.getDouble(c.getColumnIndexOrThrow("duration_seconds"));
+        r.source=s(c,"source");
+        if(r.source==null||r.source.isEmpty()) r.source="internal";
+        return r;
+    }
+
+    // WEAR RECORDS ------------------------------------------------------------
+    // 하루 1개면 1.0회, 하루 2개면 각 0.5회로 통계 계산한다.
+
+    public void saveWear(long watchId, String date, int slot, double wearRatio, String note) {
+        int safeSlot = slot <= 1 ? 1 : 2;
+        double safeRatio = Math.max(0.0, Math.min(1.0, wearRatio));
+        Watch watch = getWatch(watchId);
+        String watchName = watch == null ? "" : safe(watch.modelName);
+        String representativeImage = watch == null ? "" : safe(watch.representativeImageUrl);
+        String calendarImage = watch == null ? "" : safe(watch.calendarImageUrl);
+        if (calendarImage.isEmpty()) calendarImage = representativeImage;
+
+        ContentValues v = new ContentValues();
+        v.put("watch_id", watchId);
+        v.put("watch_name_snapshot", watchName);
+        v.put("representative_image_snapshot", representativeImage);
+        v.put("calendar_image_snapshot", calendarImage);
+        v.put("wear_date", date);
+        v.put("slot", safeSlot);
+        v.put("wear_ratio", safeRatio);
+        v.put("note", note);
+        v.put("created_at", System.currentTimeMillis());
+        getWritableDatabase().insertWithOnConflict("wear_records", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    public List<WearRow> getWears(String date) {
+        List<WearRow> list = new ArrayList<>();
+        String sql = "SELECT r.*," +
+                "COALESCE(NULLIF(r.watch_name_snapshot,''),w.model_name,'삭제된 시계') AS display_name," +
+                "COALESCE(NULLIF(r.calendar_image_snapshot,''),NULLIF(w.calendar_image_url,'')," +
+                "NULLIF(r.representative_image_snapshot,''),w.representative_image_url,'') AS image_url " +
+                "FROM wear_records r LEFT JOIN watches w ON w.id=r.watch_id " +
+                "WHERE r.wear_date=? ORDER BY r.slot";
+        Cursor c = getReadableDatabase().rawQuery(sql, new String[]{date});
+        try { while (c.moveToNext()) list.add(readWear(c)); } finally { c.close(); }
+        return list;
+    }
+
+    public Map<String, List<WearRow>> getWearRange(String start, String end) {
+        Map<String, List<WearRow>> map = new LinkedHashMap<>();
+        String sql = "SELECT r.*," +
+                "COALESCE(NULLIF(r.watch_name_snapshot,''),w.model_name,'삭제된 시계') AS display_name," +
+                "COALESCE(NULLIF(r.calendar_image_snapshot,''),NULLIF(w.calendar_image_url,'')," +
+                "NULLIF(r.representative_image_snapshot,''),w.representative_image_url,'') AS image_url " +
+                "FROM wear_records r LEFT JOIN watches w ON w.id=r.watch_id " +
+                "WHERE r.wear_date BETWEEN ? AND ? ORDER BY r.wear_date,r.slot";
+        Cursor c = getReadableDatabase().rawQuery(sql, new String[]{start,end});
+        try {
+            while(c.moveToNext()) {
+                WearRow r=readWear(c);
+                List<WearRow> rows = map.get(r.date);
+                if (rows == null) { rows = new ArrayList<>(); map.put(r.date, rows); }
+                rows.add(r);
+            }
+        } finally { c.close(); }
+        return map;
+    }
+
+    private WearRow readWear(Cursor c) {
+        WearRow r = new WearRow();
+        r.id=c.getLong(c.getColumnIndexOrThrow("id"));
+        r.watchId=c.getLong(c.getColumnIndexOrThrow("watch_id"));
+        int slotIndex = c.getColumnIndex("slot");
+        r.slot = slotIndex >= 0 ? c.getInt(slotIndex) : 1;
+        int ratioIndex = c.getColumnIndex("wear_ratio");
+        r.wearRatio = ratioIndex >= 0 && !c.isNull(ratioIndex) ? c.getDouble(ratioIndex) : 1.0;
+        r.watchName=s(c,"display_name");
+        r.date=s(c,"wear_date");
+        r.note=s(c,"note");
+        r.imageUrl=s(c,"image_url");
+        return r;
+    }
+
+    public void clearWearDate(String date) {
+        getWritableDatabase().delete("wear_records", "wear_date=?", new String[]{date});
+    }
+
+    public int countWearInMonth(String yyyyMm) {
+        Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(DISTINCT wear_date) FROM wear_records WHERE wear_date LIKE ?", new String[]{yyyyMm + "%"});
+        try { return c.moveToFirst() ? c.getInt(0) : 0; } finally { c.close(); }
+    }
+
+    public double getWearScoreForWatch(long watchId, String start, String end) {
+        String sql = "SELECT COALESCE(SUM(wear_ratio),0) FROM wear_records WHERE watch_id=? AND wear_date BETWEEN ? AND ?";
+        Cursor c = getReadableDatabase().rawQuery(sql, new String[]{String.valueOf(watchId),start,end});
+        try { return c.moveToFirst() ? c.getDouble(0) : 0.0; } finally { c.close(); }
+    }
+
+    public double getAllTimeWearScoreForWatch(long watchId) {
+        String sql = "SELECT COALESCE(SUM(wear_ratio),0) FROM wear_records WHERE watch_id=?";
+        Cursor c = getReadableDatabase().rawQuery(sql, new String[]{String.valueOf(watchId)});
+        try { return c.moveToFirst() ? c.getDouble(0) : 0.0; } finally { c.close(); }
+    }
+
+    public Map<Long, Double> getAllTimeWearScores() {
+        Map<Long, Double> out = new LinkedHashMap<>();
+        String sql = "SELECT w.id, COALESCE(SUM(CASE WHEN r.id IS NULL THEN 0.0 ELSE r.wear_ratio END),0) AS score " +
+                "FROM watches w LEFT JOIN wear_records r ON r.watch_id=w.id " +
+                "GROUP BY w.id ORDER BY score DESC,w.brand,w.model_name";
+        Cursor c = getReadableDatabase().rawQuery(sql, null);
+        try { while (c.moveToNext()) out.put(c.getLong(0), c.getDouble(1)); } finally { c.close(); }
+        return out;
+    }
+
+    public Map<Long, Double> getWearScores(String start, String end) {
+        Map<Long, Double> out = new LinkedHashMap<>();
+        String sql = "SELECT watch_id, SUM(wear_ratio) AS score FROM wear_records WHERE wear_date BETWEEN ? AND ? GROUP BY watch_id ORDER BY score DESC";
+        Cursor c = getReadableDatabase().rawQuery(sql, new String[]{start,end});
+        try { while (c.moveToNext()) out.put(c.getLong(0), c.getDouble(1)); } finally { c.close(); }
+        return out;
+    }
+
+    public List<WearStat> getTopWorn(String start, String end, int limit) {
+        List<WearStat> out = new ArrayList<>();
+        String sql = "SELECT r.watch_id," +
+                "COALESCE(NULLIF(MAX(r.watch_name_snapshot),''),MAX(w.model_name),'삭제된 시계') AS display_name," +
+                "COALESCE(NULLIF(MAX(w.representative_image_url),'')," +
+                "NULLIF(MAX(r.representative_image_snapshot),''),'') AS representative_image," +
+                "SUM(r.wear_ratio) AS score " +
+                "FROM wear_records r LEFT JOIN watches w ON w.id=r.watch_id " +
+                "WHERE r.wear_date BETWEEN ? AND ? GROUP BY r.watch_id " +
+                "ORDER BY score DESC,display_name LIMIT " + Math.max(1,limit);
+        Cursor c = getReadableDatabase().rawQuery(sql, new String[]{start,end});
+        try {
+            while(c.moveToNext()) {
+                WearStat s = new WearStat();
+                s.watchId=c.getLong(0);
+                s.watchName=c.getString(1)==null?"":c.getString(1);
+                s.imageUrl=c.getString(2)==null?"":c.getString(2);
+                s.score=c.getDouble(3);
+                out.add(s);
+            }
+        } finally { c.close(); }
+        return out;
+    }
+
+    public String getMostWornWatchName() {
+        String sql = "SELECT COALESCE(NULLIF(MAX(r.watch_name_snapshot),''),MAX(w.model_name),'삭제된 시계'), " +
+                "SUM(r.wear_ratio) AS score " +
+                "FROM wear_records r LEFT JOIN watches w ON w.id=r.watch_id " +
+                "GROUP BY r.watch_id ORDER BY score DESC LIMIT 1";
+        Cursor c = getReadableDatabase().rawQuery(sql, null);
+        try { return c.moveToFirst() ? c.getString(0) : "–"; } finally { c.close(); }
+    }
+
+    // WEAR PHOTOS / 오착 ----------------------------------------------------
+
+    public long addWearPhoto(long watchId, String watchName, String wearDate, String imagePath) {
+        ContentValues v = new ContentValues();
+        v.put("watch_id", watchId);
+        v.put("watch_name_snapshot", watchName == null ? "" : watchName);
+        v.put("wear_date", wearDate == null ? "" : wearDate);
+        v.put("image_path", imagePath == null ? "" : imagePath);
+        v.put("created_at", System.currentTimeMillis());
+        return getWritableDatabase().insert("wear_photos", null, v);
+    }
+
+    public List<WearPhotoRow> getWearPhotosForDateWatch(String wearDate, long watchId) {
+        List<WearPhotoRow> out = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM wear_photos WHERE wear_date=? AND watch_id=? ORDER BY id DESC",
+                new String[]{wearDate, String.valueOf(watchId)});
+        try {
+            while(c.moveToNext()) out.add(readWearPhoto(c));
+        } finally { c.close(); }
+        return out;
+    }
+
+    public List<WearPhotoRow> getWearPhotosForWatch(long watchId) {
+        List<WearPhotoRow> out = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM wear_photos WHERE watch_id=? ORDER BY wear_date DESC, id DESC",
+                new String[]{String.valueOf(watchId)});
+        try {
+            while(c.moveToNext()) out.add(readWearPhoto(c));
+        } finally { c.close(); }
+        return out;
+    }
+
+    public List<String> getWearPhotoDatesForWatch(long watchId) {
+        List<String> out = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT DISTINCT wear_date FROM wear_photos WHERE watch_id=? ORDER BY wear_date DESC",
+                new String[]{String.valueOf(watchId)});
+        try {
+            while(c.moveToNext()) {
+                String date = c.isNull(0) ? "" : c.getString(0);
+                if(!date.isEmpty()) out.add(date);
+            }
+        } finally { c.close(); }
+        return out;
+    }
+
+    public int getWearPhotoCountForWatch(long watchId) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM wear_photos WHERE watch_id=?",
+                new String[]{String.valueOf(watchId)});
+        try { return c.moveToFirst() ? c.getInt(0) : 0; } finally { c.close(); }
+    }
+
+    private WearPhotoRow readWearPhoto(Cursor c) {
+        WearPhotoRow r = new WearPhotoRow();
+        r.id = c.getLong(c.getColumnIndexOrThrow("id"));
+        r.watchId = c.getLong(c.getColumnIndexOrThrow("watch_id"));
+        r.watchName = s(c,"watch_name_snapshot");
+        r.wearDate = s(c,"wear_date");
+        r.imagePath = s(c,"image_path");
+        return r;
+    }
+
+    public void deleteWearPhoto(long id) {
+        String path = "";
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT image_path FROM wear_photos WHERE id=?",
+                new String[]{String.valueOf(id)});
+        try { if(c.moveToFirst() && !c.isNull(0)) path=c.getString(0); } finally { c.close(); }
+        getWritableDatabase().delete("wear_photos","id=?",new String[]{String.valueOf(id)});
+        deleteInternalFile(path);
+    }
+
+    public void deleteWearPhotosForDate(String wearDate) {
+        List<String> paths = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT image_path FROM wear_photos WHERE wear_date=?",
+                new String[]{wearDate});
+        try { while(c.moveToNext()) if(!c.isNull(0)) paths.add(c.getString(0)); } finally { c.close(); }
+        getWritableDatabase().delete("wear_photos","wear_date=?",new String[]{wearDate});
+        for(String path:paths) deleteInternalFile(path);
+    }
+
+    private void deleteInternalFile(String path) {
+        try {
+            if(path==null||path.trim().isEmpty()) return;
+            java.io.File f=new java.io.File(path);
+            if(f.exists() && f.isFile()) f.delete();
+        } catch(Exception ignored) {}
+    }
+
+    // REPAIR HISTORY ---------------------------------------------------------
+
+    public long addRepair(long watchId, String date, String type, String details) {
+        ContentValues v = new ContentValues();
+        v.put("watch_id", watchId);
+        v.put("repair_date", date);
+        v.put("repair_type", type);
+        v.put("details", details);
+        v.put("created_at", System.currentTimeMillis());
+        return getWritableDatabase().insert("repair_records", null, v);
+    }
+
+    public List<RepairRow> getRepairsForWatch(long watchId) {
+        List<RepairRow> out = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM repair_records WHERE watch_id=? ORDER BY repair_date DESC,id DESC",
+                new String[]{String.valueOf(watchId)});
+        try {
+            while(c.moveToNext()) {
+                RepairRow r = new RepairRow();
+                r.id = c.getLong(c.getColumnIndexOrThrow("id"));
+                r.watchId = c.getLong(c.getColumnIndexOrThrow("watch_id"));
+                r.repairDate = s(c,"repair_date");
+                r.repairType = s(c,"repair_type");
+                r.details = s(c,"details");
+                out.add(r);
+            }
+        } finally { c.close(); }
+        return out;
+    }
+
+    public String getLatestOverhaulDate(long watchId) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT MAX(repair_date) FROM repair_records WHERE watch_id=? AND repair_type='OVERHAUL'",
+                new String[]{String.valueOf(watchId)});
+        try { return c.moveToFirst() && !c.isNull(0) ? c.getString(0) : ""; } finally { c.close(); }
+    }
+
+    public void deleteRepair(long id) {
+        getWritableDatabase().delete("repair_records", "id=?", new String[]{String.valueOf(id)});
+    }
+
+    // HERITAGE ---------------------------------------------------------------
+
+    public long addHeritageEntry(String eventDate, Watch watch, String title, String content) {
+        return addHeritageEntry(
+                eventDate,
+                watch == null ? 0 : watch.id,
+                watch == null ? "" : watch.modelName,
+                watch == null ? "" : watch.representativeImageUrl,
+                title,
+                content);
+    }
+
+    /**
+     * 컬렉션에 없는 시계도 헤리티지에 기록할 수 있도록 스냅샷 값을 직접 저장합니다.
+     * watchId=0은 컬렉션 외부 시계 또는 수동 입력 시계를 의미합니다.
+     */
+    public long addHeritageEntry(String eventDate, long watchId, String watchName,
+                                 String watchImage, String title, String content) {
+        ContentValues v = new ContentValues();
+        v.put("event_date", eventDate == null ? "" : eventDate);
+        v.put("watch_id", Math.max(0, watchId));
+        v.put("watch_name_snapshot", watchName == null ? "" : watchName.trim());
+        v.put("watch_image_snapshot", watchImage == null ? "" : watchImage.trim());
+        v.put("title", title == null ? "" : title);
+        v.put("content", content == null ? "" : content);
+        v.put("created_at", System.currentTimeMillis());
+        return getWritableDatabase().insert("heritage_entries", null, v);
+    }
+
+    public long addHeritagePhoto(long entryId, String imagePath, int displayOrder) {
+        ContentValues v = new ContentValues();
+        v.put("entry_id", entryId);
+        v.put("image_path", imagePath == null ? "" : imagePath);
+        v.put("display_order", displayOrder);
+        v.put("created_at", System.currentTimeMillis());
+        return getWritableDatabase().insert("heritage_photos", null, v);
+    }
+
+    public List<HeritageEntryRow> getHeritageEntries() {
+        List<HeritageEntryRow> out = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM heritage_entries ORDER BY event_date DESC,id DESC", null);
+        try {
+            while(c.moveToNext()) out.add(readHeritageEntry(c));
+        } finally { c.close(); }
+        return out;
+    }
+
+    public HeritageEntryRow getHeritageEntry(long id) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM heritage_entries WHERE id=?", new String[]{String.valueOf(id)});
+        try { return c.moveToFirst() ? readHeritageEntry(c) : null; } finally { c.close(); }
+    }
+
+    public List<HeritageEntryRow> getHeritageEntriesForWatch(long watchId) {
+        List<HeritageEntryRow> out = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM heritage_entries WHERE watch_id=? ORDER BY event_date DESC,id DESC",
+                new String[]{String.valueOf(watchId)});
+        try {
+            while(c.moveToNext()) out.add(readHeritageEntry(c));
+        } finally { c.close(); }
+        return out;
+    }
+
+    private HeritageEntryRow readHeritageEntry(Cursor c) {
+        HeritageEntryRow r = new HeritageEntryRow();
+        r.id = c.getLong(c.getColumnIndexOrThrow("id"));
+        r.watchId = c.getLong(c.getColumnIndexOrThrow("watch_id"));
+        r.eventDate = s(c,"event_date");
+        r.watchName = s(c,"watch_name_snapshot");
+        r.watchImage = s(c,"watch_image_snapshot");
+        r.title = s(c,"title");
+        r.content = s(c,"content");
+        return r;
+    }
+
+    public List<HeritagePhotoRow> getHeritagePhotos(long entryId) {
+        List<HeritagePhotoRow> out = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM heritage_photos WHERE entry_id=? ORDER BY display_order,id",
+                new String[]{String.valueOf(entryId)});
+        try {
+            while(c.moveToNext()) {
+                HeritagePhotoRow r = new HeritagePhotoRow();
+                r.id = c.getLong(c.getColumnIndexOrThrow("id"));
+                r.entryId = c.getLong(c.getColumnIndexOrThrow("entry_id"));
+                r.imagePath = s(c,"image_path");
+                r.displayOrder = c.getInt(c.getColumnIndexOrThrow("display_order"));
+                out.add(r);
+            }
+        } finally { c.close(); }
+        return out;
+    }
+
+    public void deleteHeritageEntry(long entryId) {
+        List<String> paths = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT image_path FROM heritage_photos WHERE entry_id=?",
+                new String[]{String.valueOf(entryId)});
+        try { while(c.moveToNext()) if(!c.isNull(0)) paths.add(c.getString(0)); } finally { c.close(); }
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete("heritage_photos","entry_id=?",new String[]{String.valueOf(entryId)});
+        db.delete("heritage_entries","id=?",new String[]{String.valueOf(entryId)});
+        for(String path:paths) deleteInternalFile(path);
+    }
+
+    // FORGOTTEN WATCH -------------------------------------------------------
+
+    public Set<Long> getForgottenExcludedWatchIds() {
+        Set<Long> out = new java.util.LinkedHashSet<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT watch_id FROM forgotten_watch_exclusions ORDER BY created_at", null);
+        try { while(c.moveToNext()) out.add(c.getLong(0)); } finally { c.close(); }
+        return out;
+    }
+
+    public void setForgottenWatchExcluded(long watchId, boolean excluded) {
+        SQLiteDatabase db = getWritableDatabase();
+        if(!excluded) {
+            db.delete("forgotten_watch_exclusions","watch_id=?",new String[]{String.valueOf(watchId)});
+            return;
+        }
+        ContentValues v = new ContentValues();
+        v.put("watch_id",watchId);
+        v.put("created_at",System.currentTimeMillis());
+        db.insertWithOnConflict("forgotten_watch_exclusions",null,v,SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    public ForgottenWatchRow getForgottenWatch() {
+        String sql = "SELECT w.*, MAX(r.wear_date) AS last_wear, w.created_at AS watch_created " +
+                "FROM watches w LEFT JOIN wear_records r ON r.watch_id=w.id " +
+                "WHERE NOT EXISTS (SELECT 1 FROM forgotten_watch_exclusions f WHERE f.watch_id=w.id) " +
+                "GROUP BY w.id " +
+                "ORDER BY COALESCE(MAX(r.wear_date), NULLIF(w.purchase_date,''), printf('%04d-%02d-%02d'," +
+                "CAST(strftime('%Y',w.created_at/1000,'unixepoch','localtime') AS INTEGER)," +
+                "CAST(strftime('%m',w.created_at/1000,'unixepoch','localtime') AS INTEGER)," +
+                "CAST(strftime('%d',w.created_at/1000,'unixepoch','localtime') AS INTEGER))) ASC, w.created_at ASC LIMIT 1";
+        Cursor c = getReadableDatabase().rawQuery(sql,null);
+        try {
+            if(!c.moveToFirst()) return null;
+            ForgottenWatchRow row = new ForgottenWatchRow();
+            row.watch = readWatch(c);
+            int lastIdx = c.getColumnIndex("last_wear");
+            row.lastWearDate = lastIdx>=0 && !c.isNull(lastIdx) ? c.getString(lastIdx) : "";
+            row.neverWorn = row.lastWearDate.isEmpty();
+            String reference = row.lastWearDate;
+            if(reference.isEmpty()) reference = row.watch.purchaseDate;
+            if(reference.isEmpty()) {
+                int createdIdx = c.getColumnIndex("watch_created");
+                long created = createdIdx>=0 ? c.getLong(createdIdx) : System.currentTimeMillis();
+                java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.KOREA);
+                reference = sdf.format(new java.util.Date(created));
+            }
+            row.referenceDate = reference;
+            try {
+                java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.KOREA);
+                java.util.Date ref = sdf.parse(reference);
+                long diff = System.currentTimeMillis() - (ref == null ? System.currentTimeMillis() : ref.getTime());
+                row.daysNotWorn = Math.max(0L, diff / (24L*60L*60L*1000L));
+            } catch(Exception ignored) { row.daysNotWorn = 0L; }
+            return row;
+        } finally { c.close(); }
+    }
+
+    // STRAPS -----------------------------------------------------------------
+
+    public long saveStrap(Strap s) {
+        ContentValues v = new ContentValues();
+        v.put("purchase_url",s.purchaseUrl); v.put("maker",s.maker); v.put("name",s.name); v.put("width_mm",s.widthMm); v.put("color",s.color); v.put("material",s.material);
+        v.put("image_path",s.imagePath); v.put("buckle",s.buckle); v.put("notes",s.notes);
+        SQLiteDatabase db=getWritableDatabase();
+        if(s.id>0){db.update("straps",v,"id=?",new String[]{String.valueOf(s.id)}); return s.id;}
+        v.put("created_at",System.currentTimeMillis()); return db.insert("straps",null,v);
+    }
+
+    public List<Strap> getStraps(int widthMm) {
+        List<Strap> list=new ArrayList<>();
+        Cursor c = widthMm != 0
+                ? getReadableDatabase().rawQuery("SELECT * FROM straps WHERE width_mm=? ORDER BY maker,material,color,name",new String[]{String.valueOf(widthMm)})
+                : getReadableDatabase().rawQuery("SELECT * FROM straps ORDER BY CASE WHEN width_mm<0 THEN 999 ELSE width_mm END,maker,material,color,name",null);
+        try { while(c.moveToNext()) list.add(readStrap(c)); } finally {c.close();}
+        return list;
+    }
+
+    private Strap readStrap(Cursor c){
+        Strap s=new Strap(); s.id=c.getLong(c.getColumnIndexOrThrow("id")); s.purchaseUrl=this.s(c,"purchase_url"); s.maker=this.s(c,"maker"); s.name=this.s(c,"name"); s.widthMm=c.getInt(c.getColumnIndexOrThrow("width_mm"));
+        s.color=this.s(c,"color"); s.material=this.s(c,"material"); s.imagePath=this.s(c,"image_path"); s.buckle=this.s(c,"buckle"); s.notes=this.s(c,"notes"); return s;
+    }
+
+    public void deleteStrap(long id){getWritableDatabase().delete("straps","id=?",new String[]{String.valueOf(id)});}
+
+    public List<Watch> getCompatibleWatches(int widthMm) {
+        List<Watch> out=new ArrayList<>();
+        for(Watch w:getWatches()) {
+            try { if(Math.abs(Float.parseFloat(w.lugWidthMm)-widthMm)<0.1f) out.add(w); } catch(Exception ignored) {}
+        }
+        Map<Long,Double> wear=getAllTimeWearScores();
+        out.sort((a,b)->{
+            double sa=wear.containsKey(a.id)?wear.get(a.id):0.0;
+            double sb=wear.containsKey(b.id)?wear.get(b.id):0.0;
+            int byWear=Double.compare(sb,sa);
+            if(byWear!=0) return byWear;
+            int byBrand=(a.brand==null?"":a.brand).compareToIgnoreCase(b.brand==null?"":b.brand);
+            if(byBrand!=0) return byBrand;
+            return (a.modelName==null?"":a.modelName).compareToIgnoreCase(b.modelName==null?"":b.modelName);
+        });
+        return out;
+    }
+
+
+    // COLLECTION PHOTOS -----------------------------------------------------
+
+    public long saveCollectionPhoto(CollectionPhoto photo) {
+        ContentValues v = new ContentValues();
+        v.put("original_path", photo.originalPath);
+        v.put("display_path", photo.displayPath);
+        v.put("display_order", photo.displayOrder);
+        SQLiteDatabase db = getWritableDatabase();
+        if (photo.id > 0) {
+            db.update("collection_photos", v, "id=?", new String[]{String.valueOf(photo.id)});
+            return photo.id;
+        }
+        v.put("created_at", System.currentTimeMillis());
+        return db.insert("collection_photos", null, v);
+    }
+
+    public List<CollectionPhotoRow> getCollectionPhotos() {
+        List<CollectionPhotoRow> list = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery("SELECT * FROM collection_photos ORDER BY display_order ASC, id ASC", null);
+        try {
+            while (c.moveToNext()) {
+                CollectionPhotoRow row = new CollectionPhotoRow();
+                row.id = c.getLong(c.getColumnIndexOrThrow("id"));
+                row.originalPath = s(c, "original_path");
+                row.displayPath = s(c, "display_path");
+                row.displayOrder = c.getInt(c.getColumnIndexOrThrow("display_order"));
+                list.add(row);
+            }
+        } finally { c.close(); }
+        return list;
+    }
+
+    public CollectionPhotoRow getCollectionPhoto(long id) {
+        Cursor c = getReadableDatabase().rawQuery("SELECT * FROM collection_photos WHERE id=?", new String[]{String.valueOf(id)});
+        try {
+            if (!c.moveToFirst()) return null;
+            CollectionPhotoRow row = new CollectionPhotoRow();
+            row.id = c.getLong(c.getColumnIndexOrThrow("id"));
+            row.originalPath = s(c, "original_path");
+            row.displayPath = s(c, "display_path");
+            row.displayOrder = c.getInt(c.getColumnIndexOrThrow("display_order"));
+            return row;
+        } finally { c.close(); }
+    }
+
+    public void deleteCollectionPhoto(long id) {
+        getWritableDatabase().delete("collection_photos", "id=?", new String[]{String.valueOf(id)});
+    }
+
+    public int nextCollectionPhotoOrder() {
+        Cursor c = getReadableDatabase().rawQuery("SELECT COALESCE(MAX(display_order), -1) + 1 FROM collection_photos", null);
+        try { return c.moveToFirst() ? c.getInt(0) : 0; } finally { c.close(); }
+    }
+
+    private String safe(String value) { return value == null ? "" : value.trim(); }
+
+    private String s(Cursor c,String col){int idx=c.getColumnIndex(col); if(idx<0||c.isNull(idx)) return ""; String v=c.getString(idx); return v==null?"":v;}
+}
