@@ -34,30 +34,56 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Check project structure
+      - name: Find Android project
+        id: project
+        shell: bash
         run: |
           echo "===== Repository root ====="
           ls -la
 
-          echo "===== WatchCollection ====="
-          ls -la WatchCollection
+          SETTINGS_FILE=$(find . -maxdepth 5 -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            | head -n 1)
 
-          test -f WatchCollection/settings.gradle
-          test -f WatchCollection/build.gradle
-          test -f WatchCollection/app/build.gradle
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "Android Gradle project를 찾지 못했습니다."
+            find . -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          PROJECT_DIR=${PROJECT_DIR#./}
+
+          if [ -z "$PROJECT_DIR" ]; then
+            PROJECT_DIR="."
+          fi
+
+          echo "Gradle project directory: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+          test -f "$PROJECT_DIR/settings.gradle" \
+            -o -f "$PROJECT_DIR/settings.gradle.kts"
+
+          test -f "$PROJECT_DIR/build.gradle" \
+            -o -f "$PROJECT_DIR/build.gradle.kts"
+
+          test -f "$PROJECT_DIR/app/build.gradle" \
+            -o -f "$PROJECT_DIR/app/build.gradle.kts"
 
       - name: Build debug APK
-        working-directory: WatchCollection
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Find generated APK
         run: |
-          find WatchCollection -type f -name "*.apk" -print
-          test -f WatchCollection/app/build/outputs/apk/debug/app-debug.apk
+          echo "===== Generated APK ====="
+          find . -type f -name "*.apk" -print
+
+          test -f "${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: WatchCollection-v1.19-debug-apk
-          path: WatchCollection/app/build/outputs/apk/debug/app-debug.apk
+          name: WatchCollection-v1.20-debug-apk
+          path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
