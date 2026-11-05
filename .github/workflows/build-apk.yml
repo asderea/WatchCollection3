@@ -53,7 +53,6 @@ jobs:
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           PROJECT_DIR=${PROJECT_DIR#./}
-
           if [ -z "$PROJECT_DIR" ]; then
             PROJECT_DIR="."
           fi
@@ -61,14 +60,9 @@ jobs:
           echo "Gradle project directory: $PROJECT_DIR"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-          test -f "$PROJECT_DIR/settings.gradle" \
-            -o -f "$PROJECT_DIR/settings.gradle.kts"
-
-          test -f "$PROJECT_DIR/build.gradle" \
-            -o -f "$PROJECT_DIR/build.gradle.kts"
-
-          test -f "$PROJECT_DIR/app/build.gradle" \
-            -o -f "$PROJECT_DIR/app/build.gradle.kts"
+          test -f "$PROJECT_DIR/settings.gradle" -o -f "$PROJECT_DIR/settings.gradle.kts"
+          test -f "$PROJECT_DIR/build.gradle" -o -f "$PROJECT_DIR/build.gradle.kts"
+          test -f "$PROJECT_DIR/app/build.gradle" -o -f "$PROJECT_DIR/app/build.gradle.kts"
 
       - name: Ensure AndroidX settings
         shell: bash
@@ -95,12 +89,11 @@ jobs:
         run: |
           echo "===== Generated APK ====="
           find . -type f -name "*.apk" -print
-
           test -f "${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: WatchCollection-v1.26-debug-apk
+          name: WatchCollection-v1.30-debug-apk
           path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
