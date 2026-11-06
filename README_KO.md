@@ -1,10 +1,13 @@
-# Watch Collection v1.31
+# Watch Collection v1.31.1
 
 개인 시계 컬렉션, 위시리스트, 착용 캘린더, 오차·파워리저브 측정, 스트랩, 수리 이력, 헤리티지와 컬렉션 사진을 관리하는 Android 앱입니다.
 
-## v1.31 주요 변경
+## v1.31.1 주요 변경
 
 ### 캘린더 카드와 착용 순위
+- 상단 첫 행에 `WRIST CALENDAR / 착용 캘린더`와 `착장 추천`을 좌우로 정렬했습니다.
+- 그 아래 행에서 `TODAY'S WATCH`와 `FORGOTTEN WATCH`가 같은 높이에서 시작하도록 맞췄습니다.
+- 착용 순위 카드의 `처음 3개를 표시하며...` 안내 문구를 제거했습니다.
 - `TODAY'S WATCH`의 AI 추천 설명을 카드에서 제거하고 고정 높이와 불필요한 아래 여백을 없앴습니다.
 - `FORGOTTEN WATCH` 위에 별도의 `착장 추천` 버튼을 추가했습니다.
 - 착용 순위는 앱 진입 시 `이번 달`을 먼저 표시합니다.
@@ -60,16 +63,15 @@
   - `collection_evaluations`
 
 ## 적용 순서
-1. Cloudflare Worker의 기존 코드를 `ai-backend/worker.js`로 교체하고 Deploy합니다.
-2. 새 Cloudflare Variable은 필요하지 않습니다. 기존 OpenAI 키, 토큰, 크레딧 설정을 그대로 사용합니다.
-3. `.github/workflows/build-apk.yml`을 이용해 GitHub Actions에서 APK를 빌드합니다.
-4. 기존 앱 위에 v1.31 APK를 설치하면 DB가 version 16으로 자동 승격됩니다.
+1. v1.31 Worker를 이미 배포했다면 Cloudflare Worker는 다시 수정할 필요가 없습니다.
+2. `.github/workflows/build-apk.yml`을 이용해 GitHub Actions에서 APK를 빌드합니다.
+3. 기존 앱 위에 v1.31.1 APK를 설치하면 DB와 기존 데이터가 유지됩니다.
 
 ## 빌드 결과
 GitHub Actions Artifact 이름:
 
 ```text
-WatchCollection-v1.31-debug-apk
+WatchCollection-v1.31.1-debug-apk
 ```
 
 AI 연결과 Cloudflare 설정은 `README_AI_SETUP_KO.md`를 참고합니다.

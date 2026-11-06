@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.31.1
+- 캘린더 상단을 2행 2열로 재배치해 `WRIST CALENDAR / 착용 캘린더`와 `착장 추천`을 같은 행에 정렬
+- `TODAY'S WATCH`와 `FORGOTTEN WATCH`가 같은 세로 위치에서 시작하도록 카드 행 정렬
+- 착용 순위 카드의 `처음 3개를 표시하며...` 안내 문구 제거
+- 앱 versionCode 40, versionName 1.31.1 적용
+
 ## v1.31.0
 - `TODAY'S WATCH` AI 추천 설명과 고정 높이를 제거해 카드 아래의 불필요한 여백 축소
 - `FORGOTTEN WATCH` 위에 시계·호환 스트랩을 직접 선택하는 `착장 추천` 버튼 추가

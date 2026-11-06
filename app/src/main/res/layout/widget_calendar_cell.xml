@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widgetCell"
+    android:layout_width="0dp"
+    android:layout_height="match_parent"
+    android:layout_weight="1"
+    android:background="@drawable/widget_cell_bg"
+    android:padding="1dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/widgetDay"
+            android:layout_width="match_parent"
+            android:layout_height="11dp"
+            android:gravity="center"
+            android:textColor="#222831"
+            android:textSize="7sp" />
+
+        <FrameLayout
+            android:id="@+id/widgetPhotoArea"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <!-- 하루 1개 착용: 20 × 20dp -->
+            <ImageView
+                android:id="@+id/widgetPhotoSingle"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_gravity="center"
+                android:scaleType="fitCenter"
+                android:visibility="gone" />
+
+            <!-- 하루 2개 착용: 각 16 × 16dp -->
+            <LinearLayout
+                android:id="@+id/widgetPhotoPair"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:layout_gravity="center"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/widgetPhoto1"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:layout_marginEnd="1dp"
+                    android:scaleType="fitCenter" />
+
+                <ImageView
+                    android:id="@+id/widgetPhoto2"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:layout_marginStart="1dp"
+                    android:scaleType="fitCenter" />
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+</FrameLayout>
