@@ -26,4 +26,6 @@ public class Watch {
     public String casebackOriginalImageUrl = "";
     public String imageSourceUrl = "";
     public String notes = "";
+    public String mainRole = "";
+    public String secondaryRole = "";
 }

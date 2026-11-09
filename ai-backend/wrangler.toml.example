@@ -1,4 +1,4 @@
-# Watch Collection v1.31 Worker 설정 예시
+# Watch Collection v1.32 Worker 설정 예시
 name = "watch-collection-ai"
 main = "worker.js"
 compatibility_date = "2026-11-01"

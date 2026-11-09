@@ -1,4 +1,4 @@
-# Watch Collection AI·크레딧 게이지 설정 가이드 (v1.31 · 월별 자동 갱신)
+# Watch Collection AI·크레딧 게이지 설정 가이드 (v1.32 · 월별 자동 갱신)
 
 Watch Collection은 OpenAI API 키를 Android APK에 넣지 않습니다. 앱은 개인 Cloudflare Worker만 호출하고, Worker가 OpenAI Responses API와 조직 Costs API를 호출합니다.
 
@@ -23,7 +23,36 @@ v1.30부터 앱 우측 상단에 원형 API 크레딧 게이지가 표시됩니�
 
 ---
 
-## v1.31에서 추가된 AI 기능
+
+## v1.32 개인화 컬렉션 평가
+
+v1.32의 `/api/collection/evaluate` 요청에는 다음 정보가 추가됩니다.
+
+```text
+평가 프로필
+- 선호 작동 방식
+- 선호·비선호 다이얼 색상
+- 컬렉션 운영 방향
+- 핵심 유지 시계
+- 목표 컬렉션 수
+- 장기 위시 우선순위
+- 장기 교체·완성 계획
+
+시계별 역할
+- main_role: Dress / Diver / Tool / Sports 중 필수 선택
+- secondary_role: 선택 사항
+```
+
+- 초기 평가 프로필에는 사용자의 현재 취향과 장기 계획이 입력되어 있으며 앱에서 직접 수정할 수 있습니다.
+- 평가 프로필은 앱의 `SharedPreferences`에 저장되고 컬렉션 평가 요청 시에만 Worker로 전송됩니다.
+- Worker는 메인 역할을 주 역할, 보조 역할을 보완 역할로 사용합니다. 역할이 비어 있으면 임의로 추정하지 않습니다.
+- 총점은 역할 다양성 25%, 구성 균형 25%, 중복 관리 20%, 실용성 15%, 장기 완성도 15%의 고정 가중치를 사용합니다.
+- 프로필이나 역할이 바뀌어도 자동으로 API를 호출하지 않고 앱에 `갱신 필요` 상태만 표시합니다.
+- v1.32 Worker에 필요한 새로운 Cloudflare Variable 또는 Secret은 없습니다.
+
+---
+
+## v1.31부터 사용되는 AI 기능
 
 Worker 코드 교체 후 아래 두 경로를 추가로 사용합니다. 새 Cloudflare Variable이나 Secret은 필요하지 않습니다.
 

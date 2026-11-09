@@ -23,5 +23,7 @@ public class WishWatch {
     public String representativeImageUrl = "";
     public String originalImageUrl = "";
     public String notes = "";
+    public String mainRole = "";
+    public String secondaryRole = "";
     public long replaceWatchId = -1L;
 }

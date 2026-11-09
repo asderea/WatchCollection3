@@ -290,6 +290,7 @@ public final class AiBackendClient {
                                                                   JSONArray currentWatches,
                                                                   JSONArray wishWatches,
                                                                   JSONArray releaseCandidates,
+                                                                  JSONObject evaluationProfile,
                                                                   ProgressCallback progress) throws Exception {
         if (progress != null) progress.onProgress("컬렉션 구성과 역할 중복을 정리합니다.");
         JSONObject body = new JSONObject();
@@ -297,6 +298,7 @@ public final class AiBackendClient {
         body.put("current_watches", currentWatches == null ? new JSONArray() : currentWatches);
         body.put("wish_watches", wishWatches == null ? new JSONArray() : wishWatches);
         body.put("release_candidates", releaseCandidates == null ? new JSONArray() : releaseCandidates);
+        body.put("evaluation_profile", evaluationProfile == null ? new JSONObject() : evaluationProfile);
 
         JSONObject root = request(context, "/api/collection/evaluate", body, "POST");
         JSONObject data = root.optJSONObject("data");
@@ -318,6 +320,26 @@ public final class AiBackendClient {
             }
         }
         if (out.metrics.isEmpty()) throw new IllegalStateException("세부 평가 지표가 비어 있습니다.");
+
+        // 총점은 앱에서 고정 가중치로 다시 계산해 동일한 기준을 유지합니다.
+        int weightedTotal = 0;
+        int weightSum = 0;
+        for (EvaluationMetric metric : out.metrics) {
+            int weight;
+            switch (metric.name) {
+                case "역할 다양성": weight = 25; break;
+                case "구성 균형": weight = 25; break;
+                case "중복 관리": weight = 20; break;
+                case "실용성": weight = 15; break;
+                case "장기 완성도": weight = 15; break;
+                default: weight = 0;
+            }
+            weightedTotal += metric.score * weight;
+            weightSum += weight;
+        }
+        if (weightSum > 0) out.overallScore = Math.max(0, Math.min(100,
+                Math.round((float) weightedTotal / (float) weightSum)));
+
         if (progress != null) progress.onProgress("컬렉션 평가를 저장할 준비가 끝났습니다.");
         return out;
     }

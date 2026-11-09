@@ -14,7 +14,7 @@ import java.util.Set;
 
 public class DatabaseHelper extends SQLiteOpenHelper {
     private static final String DB_NAME = "watch_collection.db";
-    private static final int DB_VERSION = 16;
+    private static final int DB_VERSION = 17;
 
     public static class AccuracyRow {
         public long id, watchId;
@@ -95,7 +95,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     }
 
     public static class CollectionEvaluationRow {
-        public String mode = "", summary = "", metricsJson = "", signature = "";
+        public String mode = "", summary = "", metricsJson = "", signature = "", membershipSignature = "";
         public int score;
         public long evaluatedAt;
     }
@@ -115,6 +115,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                 "diameter_mm TEXT, lug_to_lug_mm TEXT, thickness_mm TEXT, lug_width_mm TEXT," +
                 "power_reserve_hours TEXT, water_resistance TEXT, crystal TEXT, case_material TEXT, warranty_end_date TEXT, purchase_date TEXT," +
                 "source_urls TEXT, representative_image_url TEXT, original_image_url TEXT, calendar_image_url TEXT, caseback_image_url TEXT, caseback_original_image_url TEXT, image_source_url TEXT, notes TEXT, purchase_price TEXT," +
+                "main_role TEXT NOT NULL DEFAULT '', secondary_role TEXT NOT NULL DEFAULT ''," +
                 "created_at INTEGER NOT NULL)");
 
         db.execSQL("CREATE TABLE accuracy_records (" +
@@ -211,6 +212,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                 "power_reserve_hours TEXT, water_resistance TEXT, crystal TEXT, case_material TEXT," +
                 "target_price TEXT, priority TEXT, target_purchase_date TEXT, source_url TEXT," +
                 "representative_image_url TEXT, original_image_url TEXT, notes TEXT," +
+                "main_role TEXT NOT NULL DEFAULT '', secondary_role TEXT NOT NULL DEFAULT ''," +
                 "replace_watch_id INTEGER NOT NULL DEFAULT -1, created_at INTEGER NOT NULL)");
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_wish_priority ON wish_watches(priority,id)");
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_wish_replace_watch ON wish_watches(replace_watch_id)");
@@ -231,7 +233,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     private void createCollectionEvaluationTable(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS collection_evaluations (" +
                 "mode TEXT PRIMARY KEY, score INTEGER NOT NULL, summary TEXT, metrics_json TEXT," +
-                "item_signature TEXT NOT NULL DEFAULT '', evaluated_at INTEGER NOT NULL)");
+                "item_signature TEXT NOT NULL DEFAULT '', membership_signature TEXT NOT NULL DEFAULT '', evaluated_at INTEGER NOT NULL)");
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
@@ -299,6 +301,20 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             createPowerReserveTable(db);
             createCollectionEvaluationTable(db);
         }
+        if (oldVersion < 17) {
+            if(!hasColumn(db,"watches","main_role"))
+                db.execSQL("ALTER TABLE watches ADD COLUMN main_role TEXT NOT NULL DEFAULT ''");
+            if(!hasColumn(db,"watches","secondary_role"))
+                db.execSQL("ALTER TABLE watches ADD COLUMN secondary_role TEXT NOT NULL DEFAULT ''");
+            if(!hasColumn(db,"wish_watches","main_role"))
+                db.execSQL("ALTER TABLE wish_watches ADD COLUMN main_role TEXT NOT NULL DEFAULT ''");
+            if(!hasColumn(db,"wish_watches","secondary_role"))
+                db.execSQL("ALTER TABLE wish_watches ADD COLUMN secondary_role TEXT NOT NULL DEFAULT ''");
+            if(!hasColumn(db,"collection_evaluations","membership_signature"))
+                db.execSQL("ALTER TABLE collection_evaluations ADD COLUMN membership_signature TEXT NOT NULL DEFAULT ''");
+            db.execSQL("UPDATE collection_evaluations SET membership_signature=item_signature " +
+                    "WHERE mode='current' AND membership_signature=''");
+        }
     }
 
     private boolean hasColumn(SQLiteDatabase db,String table,String column) {
@@ -362,6 +378,8 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         v.put("image_source_url", w.imageSourceUrl);
         v.put("notes", w.notes);
         v.put("purchase_price", w.purchasePrice);
+        v.put("main_role", safe(w.mainRole));
+        v.put("secondary_role", safe(w.secondaryRole));
         return v;
     }
 
@@ -390,6 +408,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         w.casebackImageUrl=s(c,"caseback_image_url");
         w.casebackOriginalImageUrl=s(c,"caseback_original_image_url");
         w.imageSourceUrl=s(c,"image_source_url"); w.notes=s(c,"notes"); w.purchasePrice=s(c,"purchase_price");
+        w.mainRole=s(c,"main_role"); w.secondaryRole=s(c,"secondary_role");
         return w;
     }
 
@@ -1209,6 +1228,8 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         v.put("representative_image_url", safe(w.representativeImageUrl));
         v.put("original_image_url", safe(w.originalImageUrl));
         v.put("notes", safe(w.notes));
+        v.put("main_role", safe(w.mainRole));
+        v.put("secondary_role", safe(w.secondaryRole));
         v.put("replace_watch_id", w.replaceWatchId > 0 ? w.replaceWatchId : -1L);
         return v;
     }
@@ -1254,6 +1275,8 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         w.representativeImageUrl = s(c,"representative_image_url");
         w.originalImageUrl = s(c,"original_image_url");
         w.notes = s(c,"notes");
+        w.mainRole = s(c,"main_role");
+        w.secondaryRole = s(c,"secondary_role");
         w.replaceWatchId = c.getLong(c.getColumnIndexOrThrow("replace_watch_id"));
         return w;
     }
@@ -1318,19 +1341,22 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             r.summary = s(c,"summary");
             r.metricsJson = s(c,"metrics_json");
             r.signature = s(c,"item_signature");
+            r.membershipSignature = s(c,"membership_signature");
             r.evaluatedAt = c.getLong(c.getColumnIndexOrThrow("evaluated_at"));
             return r;
         } finally { c.close(); }
     }
 
     public void saveCollectionEvaluation(String mode, int score, String summary,
-                                         String metricsJson, String signature) {
+                                         String metricsJson, String signature,
+                                         String membershipSignature) {
         ContentValues v = new ContentValues();
         v.put("mode", safe(mode));
         v.put("score", Math.max(0, Math.min(100, score)));
         v.put("summary", safe(summary));
         v.put("metrics_json", metricsJson == null ? "[]" : metricsJson);
         v.put("item_signature", safe(signature));
+        v.put("membership_signature", safe(membershipSignature));
         v.put("evaluated_at", System.currentTimeMillis());
         getWritableDatabase().insertWithOnConflict(
                 "collection_evaluations", null, v, SQLiteDatabase.CONFLICT_REPLACE);

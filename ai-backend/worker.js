@@ -1,5 +1,5 @@
 /**
- * Watch Collection AI Backend v1.31 - Cloudflare Worker
+ * Watch Collection AI Backend v1.32 - Cloudflare Worker
  *
  * 필수 Secrets
  * - OPENAI_API_KEY: Responses API 호출용 프로젝트 키
@@ -323,6 +323,9 @@ async function evaluateCollection(payload, env) {
   const currentWatches = Array.isArray(payload?.current_watches) ? payload.current_watches : [];
   const wishWatches = Array.isArray(payload?.wish_watches) ? payload.wish_watches : [];
   const releaseCandidates = Array.isArray(payload?.release_candidates) ? payload.release_candidates : [];
+  const evaluationProfile = payload?.evaluation_profile && typeof payload.evaluation_profile === "object"
+    ? payload.evaluation_profile
+    : {};
   if (!currentWatches.length && !wishWatches.length) throw new Error("평가할 시계가 없습니다.");
 
   const metricNames = ["역할 다양성", "구성 균형", "중복 관리", "실용성", "장기 완성도"];
@@ -352,23 +355,32 @@ async function evaluateCollection(payload, env) {
   };
 
   const instructions = `
-You are a rigorous watch-collection evaluator. Use only the supplied data and do not browse the web.
+You are a rigorous, personalized watch-collection evaluator. Use only the supplied data and do not browse the web.
+The supplied evaluation_profile is the user's authoritative preference and long-term-plan context. Apply it when judging fit, coherence, and priorities, while still grounding every claim in supplied watch data.
+Each watch may provide main_role and secondary_role. Valid roles are Dress, Diver, Tool, and Sports. Treat main_role as primary and secondary_role as optional supporting coverage. Do not invent a role when both are blank.
 Score the collection on exactly five criteria, each from 0 to 100: 역할 다양성, 구성 균형, 중복 관리, 실용성, 장기 완성도.
-Return each criterion exactly once in that order. overall_score must be a defensible holistic score from 0 to 100, not a prestige or price ranking.
-역할 다양성: coverage of dress, field, diver, GMT/travel, casual, digital, and other distinct use cases supported by the supplied facts.
-구성 균형: balance of styles, sizes, colors, power types, and everyday versus special-purpose pieces.
-중복 관리: penalize watches that occupy nearly identical roles without a clear distinction; reward purposeful overlap.
+Return each criterion exactly once in that order.
+Use these fixed weights for the holistic score: 역할 다양성 25%, 구성 균형 25%, 중복 관리 20%, 실용성 15%, 장기 완성도 15%. overall_score should equal the rounded weighted score.
+역할 다양성: coverage and quality of the four supplied role categories, with main roles weighted more strongly than secondary roles.
+구성 균형: balance of roles, sizes, colors, power types, daily wear, and special-purpose pieces in light of the user's profile.
+중복 관리: penalize watches whose main and secondary roles, design intent, and practical use are nearly identical without a clear distinction; reward purposeful overlap.
 실용성: evaluate wearability and practical coverage using supplied dimensions, water resistance, power type, straps, and known specs. Do not assume missing facts.
-장기 완성도: evaluate whether the collection has a coherent identity and a sensible long-term path.
+장기 완성도: evaluate coherence with target_collection_size, core_watches, wishlist_priority, collection_direction, and long_term_plan in evaluation_profile.
 For mode=current, evaluate current_watches as the actual collection.
-For mode=wish, evaluate the projected collection: remove a current watch when a wish item declares replace_watch_id for it, remove every release candidate, then add all wish_watches. Also assess whether the replacement plan is coherent.
-Mention uncertainty when important fields are missing. Write concise but specific Korean reasons grounded in named supplied watches or roles.
+For mode=wish, evaluate the projected collection: remove a current watch when a wish item declares replace_watch_id for it, remove every release candidate, then add all wish_watches. Also assess whether the replacement plan follows the supplied profile.
+Mention uncertainty when important fields are missing. Write concise but specific Korean reasons grounded in named supplied watches, assigned roles, and profile priorities.
 `;
 
   return callOpenAI({
     env,
     instructions,
-    input: JSON.stringify({ mode, current_watches: currentWatches, wish_watches: wishWatches, release_candidates: releaseCandidates }),
+    input: JSON.stringify({
+      mode,
+      evaluation_profile: evaluationProfile,
+      current_watches: currentWatches,
+      wish_watches: wishWatches,
+      release_candidates: releaseCandidates,
+    }),
     schemaName: "collection_evaluation",
     schema,
     useWebSearch: false,

@@ -66,6 +66,9 @@ public class MainActivity extends Activity {
     private String selectedCalendarDate = dateFormat.format(new Date());
     private int collectionFilter = 0; // 0 All, 1 Automatic, 2 Mechanical, 3 Quartz(+Solar-Quartz)
     private String collectionBrandFilter = ""; // 빈 문자열 = 전체 브랜드, __UNBRANDED__ = 브랜드 미지정
+    private String collectionRoleFilter = ""; // 빈 문자열 = 전체 역할
+    private static final String[] WATCH_ROLES = {"Dress", "Diver", "Tool", "Sports"};
+    private static final String EVALUATION_SIGNATURE_VERSION = "profile-role-v1";
     private int monthlyWearPage = 0; // 컬렉션 규모와 관계없이 3개씩 페이지 표시
     private int wearRankingPeriod = 0; // 0 이번 달, 1 올해, 2 누적
     private int measurementMode = 0; // 0 오차 측정, 1 파워리저브 측정
@@ -670,12 +673,12 @@ public class MainActivity extends Activity {
             }
             int shown=0;
             for(Watch w:ordered) {
-                if(matchesCollectionFilter(w) && matchesBrandFilter(w)) {
+                if(matchesCollectionFilter(w) && matchesBrandFilter(w) && matchesRoleFilter(w)) {
                     p.addView(watchCard(w, w.id==focusedWatchId));
                     shown++;
                 }
             }
-            if(shown==0) p.addView(emptyCard("해당 분류의 시계가 없습니다","Power 정보를 확인하거나 필터를 변경해 주세요."));
+            if(shown==0) p.addView(emptyCard("해당 분류의 시계가 없습니다","Power, Brand 또는 Role 필터를 변경해 주세요."));
 
             p.addView(UiKit.spacer(this,4));
             LinearLayout managementActions=UiKit.row(this);
@@ -695,6 +698,7 @@ public class MainActivity extends Activity {
         focusedWatchId = watchId;
         collectionFilter = 0;
         collectionBrandFilter = "";
+        collectionRoleFilter = "";
         showCollection();
     }
 
@@ -712,16 +716,25 @@ public class MainActivity extends Activity {
         String signature=getCurrentCollectionSignature(watches);
         DatabaseHelper.CollectionEvaluationRow evaluation=db.getCollectionEvaluation("current");
         boolean valid=evaluation!=null&&signature.equals(evaluation.signature);
-        String scoreValue=valid?evaluation.score+"/100":currentCollectionEvaluationRunning?"…":"—";
-        View scoreBox=statBox(scoreValue,"AI 컬렉션 점수");
+        String scoreValue=evaluation!=null?evaluation.score+"/100":currentCollectionEvaluationRunning?"…":"—";
+        String scoreLabel=evaluation!=null&&!valid?"AI 점수 · 갱신 필요":"AI 컬렉션 점수";
+        View scoreBox=statBox(scoreValue,scoreLabel);
         scoreBox.setClickable(true);
         scoreBox.setOnClickListener(v->{
             DatabaseHelper.CollectionEvaluationRow latest=db.getCollectionEvaluation("current");
-            if(latest!=null&&signature.equals(latest.signature)) showCollectionEvaluationDialog(latest,"현재 컬렉션 평가",false);
-            else runCurrentCollectionEvaluation(watches,signature,true);
+            if(latest!=null) showCollectionEvaluationDialog(latest,"현재 컬렉션 평가",false);
+            else runCurrentCollectionEvaluation(new ArrayList<>(watches),signature,
+                    getCurrentCollectionMembershipSignature(watches),true);
         });
         row.addView(scoreBox,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
         card.addView(row);
+
+        if(evaluation!=null&&!valid) {
+            TextView stale=UiKit.muted(this,"평가 프로필 또는 시계 정보가 변경되어 재평가가 필요합니다.",10);
+            stale.setTextColor(UiKit.GOLD);
+            stale.setPadding(0,UiKit.dp(this,8),0,0);
+            card.addView(stale);
+        }
 
         Map<Long,Double> scores=db.getAllTimeWearScores();
         Watch mostWatch=null;
@@ -743,10 +756,17 @@ public class MainActivity extends Activity {
             most.setOnClickListener(v->showWatchDetailPopup(topWatch));
         }
         card.addView(most);
+
+        TextView profile=UiKit.text(this,"평가 프로필  ›",11,true);
+        profile.setTextColor(UiKit.GOLD);
+        profile.setGravity(Gravity.END);
+        profile.setPadding(0,UiKit.dp(this,10),0,0);
+        profile.setOnClickListener(v->showEvaluationProfileDialog(this::showCollection));
+        card.addView(profile);
         return card;
     }
 
-    private String getCurrentCollectionSignature(List<Watch> watches) {
+    private String getCurrentCollectionMembershipSignature(List<Watch> watches) {
         List<Long> ids=new ArrayList<>();
         for(Watch watch:watches) ids.add(watch.id);
         Collections.sort(ids);
@@ -755,34 +775,70 @@ public class MainActivity extends Activity {
         return String.join(",",values);
     }
 
-    private void maybeEvaluateCurrentCollection(List<Watch> watches) {
-        String signature=getCurrentCollectionSignature(watches);
-        DatabaseHelper.CollectionEvaluationRow saved=db.getCollectionEvaluation("current");
-        if(saved!=null&&signature.equals(saved.signature)) return;
-        if(currentCollectionEvaluationRunning) return;
-        if(signature.equals(currentCollectionEvaluationAttemptedSignature)) return;
-        if(!AiBackendClient.isConfigured(this)) return;
-        currentCollectionEvaluationAttemptedSignature=signature;
-        runCurrentCollectionEvaluation(new ArrayList<>(watches),signature,false);
+    private String getCurrentCollectionSignature(List<Watch> watches) {
+        List<Watch> ordered=new ArrayList<>(watches);
+        ordered.sort((a,b)->Long.compare(a.id,b.id));
+        StringBuilder raw=new StringBuilder();
+        raw.append(EVALUATION_SIGNATURE_VERSION).append('|');
+        raw.append(getCurrentCollectionMembershipSignature(ordered)).append('|');
+        raw.append(CollectionEvaluationProfile.load(this).fingerprint()).append('|');
+        for(Watch watch:ordered) {
+            raw.append(watch.id).append('~')
+                    .append(safeText(watch.brand)).append('~')
+                    .append(safeText(watch.modelName)).append('~')
+                    .append(safeText(watch.referenceNo)).append('~')
+                    .append(normalizePower(watch.movement)).append('~')
+                    .append(safeText(watch.caliber)).append('~')
+                    .append(safeText(watch.diameterMm)).append('~')
+                    .append(safeText(watch.lugToLugMm)).append('~')
+                    .append(safeText(watch.thicknessMm)).append('~')
+                    .append(safeText(watch.lugWidthMm)).append('~')
+                    .append(safeText(watch.powerReserveHours)).append('~')
+                    .append(safeText(watch.waterResistance)).append('~')
+                    .append(safeText(watch.caseMaterial)).append('~')
+                    .append(normalizeRole(watch.mainRole)).append('~')
+                    .append(normalizeRole(watch.secondaryRole)).append('~')
+                    .append(safeText(watch.notes)).append('|');
+        }
+        List<Strap> straps=new ArrayList<>(db.getStraps(0));
+        straps.sort((a,b)->Long.compare(a.id,b.id));
+        for(Strap strap:straps) {
+            raw.append("strap~").append(strap.id).append('~').append(strap.widthMm).append('~')
+                    .append(safeText(strap.maker)).append('~').append(safeText(strap.name)).append('~')
+                    .append(safeText(strap.material)).append('~').append(safeText(strap.color)).append('|');
+        }
+        return CollectionEvaluationProfile.sha256(raw.toString());
     }
 
-    private void runCurrentCollectionEvaluation(List<Watch> watches,String signature,boolean userInitiated) {
+    private void maybeEvaluateCurrentCollection(List<Watch> watches) {
+        String membershipSignature=getCurrentCollectionMembershipSignature(watches);
+        DatabaseHelper.CollectionEvaluationRow saved=db.getCollectionEvaluation("current");
+        if(saved!=null&&membershipSignature.equals(saved.membershipSignature)) return;
+        if(currentCollectionEvaluationRunning) return;
+        if(membershipSignature.equals(currentCollectionEvaluationAttemptedSignature)) return;
+        if(!AiBackendClient.isConfigured(this)) return;
+        currentCollectionEvaluationAttemptedSignature=membershipSignature;
+        runCurrentCollectionEvaluation(new ArrayList<>(watches),getCurrentCollectionSignature(watches),membershipSignature,false);
+    }
+
+    private void runCurrentCollectionEvaluation(List<Watch> watches,String signature,
+                                                String membershipSignature,boolean userInitiated) {
         if(watches==null||watches.isEmpty()) return;
         if(currentCollectionEvaluationRunning) {
             Toast.makeText(this,"컬렉션 평가가 진행 중입니다.",Toast.LENGTH_SHORT).show();
             return;
         }
         if(!AiBackendClient.isConfigured(this)) {
-            showAiSettingsDialog(()->runCurrentCollectionEvaluation(watches,signature,userInitiated));
+            showAiSettingsDialog(()->runCurrentCollectionEvaluation(watches,signature,membershipSignature,userInitiated));
             return;
         }
         currentCollectionEvaluationRunning=true;
         currentCollectionEvaluationLastAttempt=System.currentTimeMillis();
-        currentCollectionEvaluationAttemptedSignature=signature;
+        currentCollectionEvaluationAttemptedSignature=membershipSignature;
         final AlertDialog loading;
         final TextView progress;
         if(userInitiated) {
-            progress=UiKit.muted(this,"컬렉션 구성을 정리합니다.",12);
+            progress=UiKit.muted(this,"컬렉션 구성과 개인 평가 프로필을 정리합니다.",12);
             progress.setPadding(UiKit.dp(this,18),UiKit.dp(this,14),UiKit.dp(this,18),UiKit.dp(this,14));
             loading=new AlertDialog.Builder(this)
                     .setTitle("AI 컬렉션 평가")
@@ -799,9 +855,10 @@ public class MainActivity extends Activity {
             try {
                 AiBackendClient.CollectionEvaluationResult result=AiBackendClient.evaluateCollection(
                         this,"current",buildCurrentCollectionEvaluationPayload(watches),new JSONArray(),new JSONArray(),
+                        CollectionEvaluationProfile.load(this).toJson(),
                         message->{if(progress!=null)runOnUiThread(()->progress.setText(message));});
                 String metrics=serializeEvaluationMetrics(result.metrics);
-                db.saveCollectionEvaluation("current",result.overallScore,result.summary,metrics,signature);
+                db.saveCollectionEvaluation("current",result.overallScore,result.summary,metrics,signature,membershipSignature);
                 runOnUiThread(()->{
                     currentCollectionEvaluationRunning=false;
                     if(loading!=null&&loading.isShowing()) loading.dismiss();
@@ -865,6 +922,8 @@ public class MainActivity extends Activity {
         item.put("power_reserve_hours",watch.powerReserveHours);
         item.put("water_resistance",watch.waterResistance);
         item.put("case_material",watch.caseMaterial);
+        item.put("main_role",normalizeRole(watch.mainRole));
+        item.put("secondary_role",normalizeRole(watch.secondaryRole));
         item.put("notes",watch.notes);
         return item;
     }
@@ -883,11 +942,19 @@ public class MainActivity extends Activity {
 
     private void showCollectionEvaluationDialog(DatabaseHelper.CollectionEvaluationRow evaluation,
                                                 String dialogTitle,boolean wishMode) {
+        String currentSignature=wishMode?getWishCollectionSignature():getCurrentCollectionSignature(db.getWatches());
+        boolean stale=!currentSignature.equals(evaluation.signature);
         LinearLayout body=UiKit.column(this);
         body.setPadding(UiKit.dp(this,18),UiKit.dp(this,8),UiKit.dp(this,18),UiKit.dp(this,14));
         TextView score=UiKit.text(this,evaluation.score+"/100",32,true);
         score.setTextColor(UiKit.GOLD);
         body.addView(score);
+        if(stale) {
+            TextView notice=UiKit.text(this,"현재 역할·시계 정보 또는 평가 프로필과 다른 이전 평가입니다.",11,true);
+            notice.setTextColor(UiKit.GOLD);
+            notice.setPadding(0,0,0,UiKit.dp(this,9));
+            body.addView(notice);
+        }
         if(!evaluation.summary.isEmpty()) {
             body.addView(UiKit.text(this,evaluation.summary,14,true));
             body.addView(UiKit.spacer(this,10));
@@ -918,11 +985,95 @@ public class MainActivity extends Activity {
         body.addView(UiKit.muted(this,"평가 시각 · "+formatMeasurementTime(evaluation.evaluatedAt),10));
         ScrollView scroll=new ScrollView(this);
         scroll.addView(body);
-        new AlertDialog.Builder(this)
+        AlertDialog dialog=new AlertDialog.Builder(this)
                 .setTitle(dialogTitle)
                 .setView(scroll)
+                .setNegativeButton("다시 평가",null)
+                .setNeutralButton("평가 프로필",null)
                 .setPositiveButton("닫기",null)
-                .show();
+                .create();
+        dialog.setOnShowListener(x->{
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->{
+                dialog.dismiss();
+                if(wishMode) {
+                    runWishCollectionEvaluation(getWishCollectionSignature());
+                } else {
+                    List<Watch> watches=db.getWatches();
+                    runCurrentCollectionEvaluation(watches,getCurrentCollectionSignature(watches),
+                            getCurrentCollectionMembershipSignature(watches),true);
+                }
+            });
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->{
+                dialog.dismiss();
+                Runnable afterProfileSave=wishMode?()->showWishlist():()->showCollection();
+                showEvaluationProfileDialog(afterProfileSave);
+            });
+        });
+        dialog.show();
+    }
+
+    private void showEvaluationProfileDialog(Runnable afterSave) {
+        CollectionEvaluationProfile profile=CollectionEvaluationProfile.load(this);
+        LinearLayout form=UiKit.column(this);
+        form.setPadding(UiKit.dp(this,18),UiKit.dp(this,8),UiKit.dp(this,18),UiKit.dp(this,12));
+
+        EditText movement=addProfileField(form,"선호 작동 방식",profile.movementPreference,2);
+        EditText preferredColors=addProfileField(form,"선호 다이얼 색상",profile.preferredColors,2);
+        EditText dislikedColors=addProfileField(form,"비선호 다이얼 색상",profile.dislikedColors,2);
+        EditText direction=addProfileField(form,"컬렉션 운영 방향",profile.collectionDirection,4);
+        EditText core=addProfileField(form,"핵심 유지 시계",profile.coreWatches,4);
+        EditText targetSize=addField(form,"목표 컬렉션 수","8",String.valueOf(profile.targetCollectionSize));
+        targetSize.setInputType(InputType.TYPE_CLASS_NUMBER);
+        EditText priority=addProfileField(form,"장기 위시 우선순위",profile.wishlistPriority,6);
+        EditText plan=addProfileField(form,"장기 교체·완성 계획",profile.longTermPlan,5);
+
+        ScrollView scroll=new ScrollView(this);
+        scroll.addView(form);
+        AlertDialog dialog=new AlertDialog.Builder(this)
+                .setTitle("컬렉션 평가 프로필")
+                .setView(scroll)
+                .setNegativeButton("취소",null)
+                .setNeutralButton("기본값 복원",null)
+                .setPositiveButton("저장",null)
+                .create();
+        dialog.setOnShowListener(x->{
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->{
+                CollectionEvaluationProfile defaults=CollectionEvaluationProfile.defaultProfile();
+                movement.setText(defaults.movementPreference);
+                preferredColors.setText(defaults.preferredColors);
+                dislikedColors.setText(defaults.dislikedColors);
+                direction.setText(defaults.collectionDirection);
+                core.setText(defaults.coreWatches);
+                targetSize.setText(String.valueOf(defaults.targetCollectionSize));
+                priority.setText(defaults.wishlistPriority);
+                plan.setText(defaults.longTermPlan);
+            });
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+                CollectionEvaluationProfile updated=new CollectionEvaluationProfile();
+                updated.movementPreference=val(movement);
+                updated.preferredColors=val(preferredColors);
+                updated.dislikedColors=val(dislikedColors);
+                updated.collectionDirection=val(direction);
+                updated.coreWatches=val(core);
+                try { updated.targetCollectionSize=Math.max(1,Integer.parseInt(val(targetSize))); }
+                catch(Exception ignored) { updated.targetCollectionSize=8; }
+                updated.wishlistPriority=val(priority);
+                updated.longTermPlan=val(plan);
+                CollectionEvaluationProfile.save(this,updated);
+                dialog.dismiss();
+                Toast.makeText(this,"평가 프로필을 저장했습니다. 기존 점수는 유지되며 수동 재평가 시 반영됩니다.",Toast.LENGTH_LONG).show();
+                if(afterSave!=null) afterSave.run();
+            });
+        });
+        dialog.show();
+    }
+
+    private EditText addProfileField(LinearLayout parent,String label,String value,int minLines) {
+        EditText field=addField(parent,label,"",value);
+        field.setSingleLine(false);
+        field.setMinLines(minLines);
+        field.setGravity(Gravity.TOP|Gravity.START);
+        return field;
     }
 
     private View monthlyWearSummary() {
@@ -996,7 +1147,7 @@ public class MainActivity extends Activity {
         row.addView(powerBox,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
 
         LinearLayout brandBox=UiKit.column(this);
-        brandBox.setPadding(UiKit.dp(this,8),0,0,0);
+        brandBox.setPadding(UiKit.dp(this,5),0,UiKit.dp(this,5),0);
         brandBox.addView(UiKit.label(this,"Brand"));
         Spinner brand=new Spinner(this);
         List<String> brandItems=new ArrayList<>();
@@ -1024,6 +1175,22 @@ public class MainActivity extends Activity {
         brandBox.addView(brand);
         row.addView(brandBox,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
 
+        LinearLayout roleBox=UiKit.column(this);
+        roleBox.addView(UiKit.label(this,"Role"));
+        Spinner role=new Spinner(this);
+        List<String> roleItems=new ArrayList<>();
+        roleItems.add("All");
+        Collections.addAll(roleItems,WATCH_ROLES);
+        role.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,roleItems));
+        decorateSpinner(role);
+        int roleSelection=0;
+        for(int i=1;i<roleItems.size();i++) {
+            if(roleItems.get(i).equalsIgnoreCase(collectionRoleFilter)) { roleSelection=i; break; }
+        }
+        role.setSelection(roleSelection);
+        roleBox.addView(role);
+        row.addView(roleBox,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
+
         power.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent,View view,int position,long id) {
                 if(position!=collectionFilter) {
@@ -1044,6 +1211,16 @@ public class MainActivity extends Activity {
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
+        role.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent,View view,int position,long id) {
+                String selected=position<=0?"":String.valueOf(parent.getItemAtPosition(position));
+                if(!safeText(collectionRoleFilter).equalsIgnoreCase(selected)) {
+                    collectionRoleFilter=selected;
+                    showCollection();
+                }
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
         return row;
     }
 
@@ -1052,6 +1229,12 @@ public class MainActivity extends Activity {
         String brand=safeText(w.brand).trim();
         if("__UNBRANDED__".equals(collectionBrandFilter)) return brand.isEmpty();
         return brand.equalsIgnoreCase(collectionBrandFilter);
+    }
+
+    private boolean matchesRoleFilter(Watch w) {
+        if(collectionRoleFilter==null||collectionRoleFilter.isEmpty()) return true;
+        return collectionRoleFilter.equalsIgnoreCase(normalizeRole(w.mainRole))
+                || collectionRoleFilter.equalsIgnoreCase(normalizeRole(w.secondaryRole));
     }
 
     private boolean matchesCollectionFilter(Watch w) {
@@ -1099,6 +1282,12 @@ public class MainActivity extends Activity {
         info.addView(UiKit.eyebrow(this,w.brand.isEmpty()?"WATCH":w.brand));
         info.addView(UiKit.text(this,w.modelName,18,true));
         if(!w.referenceNo.isEmpty()) info.addView(UiKit.muted(this,"Ref. "+w.referenceNo,11));
+        String roles=roleSummary(w.mainRole,w.secondaryRole);
+        if(!roles.isEmpty()) {
+            TextView role=UiKit.text(this,roles,11,true);
+            role.setTextColor(UiKit.GOLD);
+            info.addView(role);
+        }
         info.addView(UiKit.spacer(this,7));
         View specView=buildWatchSummarySpecs(w);
         if(specView!=null) info.addView(specView);
@@ -1247,14 +1436,13 @@ public class MainActivity extends Activity {
         String signature=getWishCollectionSignature();
         DatabaseHelper.CollectionEvaluationRow evaluation=db.getCollectionEvaluation("wish");
         boolean valid=evaluation!=null&&signature.equals(evaluation.signature);
-        Button evaluate=UiKit.primaryButton(this,valid?"Wish 컬렉션 평가 · "+evaluation.score+"/100":"Wish 컬렉션 평가");
+        String evaluationLabel=evaluation==null?"Wish 컬렉션 평가":
+                "Wish 컬렉션 평가 · "+evaluation.score+"/100"+(valid?"":" · 갱신 필요");
+        Button evaluate=UiKit.primaryButton(this,evaluationLabel);
         evaluate.setOnClickListener(v->{
             DatabaseHelper.CollectionEvaluationRow latest=db.getCollectionEvaluation("wish");
-            if(latest!=null&&signature.equals(latest.signature)) {
-                showCollectionEvaluationDialog(latest,"Wish 컬렉션 평가",true);
-            } else {
-                runWishCollectionEvaluation(signature);
-            }
+            if(latest!=null) showCollectionEvaluationDialog(latest,"Wish 컬렉션 평가",true);
+            else runWishCollectionEvaluation(signature);
         });
         p.addView(evaluate);
         setScrollable(p);
@@ -1279,6 +1467,12 @@ public class MainActivity extends Activity {
         name.setMaxLines(2);
         info.addView(name);
         if(!wish.referenceNo.isEmpty()) info.addView(UiKit.muted(this,"Ref. "+wish.referenceNo,10));
+        String roles=roleSummary(wish.mainRole,wish.secondaryRole);
+        if(!roles.isEmpty()) {
+            TextView role=UiKit.text(this,roles,10,true);
+            role.setTextColor(UiKit.GOLD);
+            info.addView(role);
+        }
         if(!wish.targetPrice.isEmpty()) {
             TextView price=UiKit.text(this,"목표 "+formatWon(wish.targetPrice),12,true);
             price.setTextColor(UiKit.GOLD);
@@ -1345,6 +1539,21 @@ public class MainActivity extends Activity {
         form.addView(UiKit.label(this,"작동방식"));
         Spinner power=powerSpinner(base.movement);
         form.addView(power);
+
+        LinearLayout roleRow=UiKit.row(this);
+        LinearLayout mainRoleBox=UiKit.column(this);
+        mainRoleBox.addView(UiKit.label(this,"Main Role *"));
+        Spinner mainRole=roleSpinner(base.mainRole,"미지정");
+        mainRoleBox.addView(mainRole);
+        roleRow.addView(mainRoleBox,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
+        LinearLayout secondaryRoleBox=UiKit.column(this);
+        secondaryRoleBox.setPadding(UiKit.dp(this,8),0,0,0);
+        secondaryRoleBox.addView(UiKit.label(this,"Secondary Role"));
+        Spinner secondaryRole=roleSpinner(base.secondaryRole,"없음");
+        secondaryRoleBox.addView(secondaryRole);
+        roleRow.addView(secondaryRoleBox,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
+        form.addView(roleRow);
+
         EditText caliber=addField(form,"무브먼트","예: MT5612",base.caliber);
         EditText diameter=addField(form,"Diameter (mm)","42",base.diameterMm);
         EditText l2l=addField(form,"Lug-to-lug (mm)","50",base.lugToLugMm);
@@ -1458,10 +1667,15 @@ public class MainActivity extends Activity {
                 Toast.makeText(this,"사진 처리가 끝날 때까지 기다려 주세요.",Toast.LENGTH_SHORT).show();
                 return;
             }
+            String selectedMainRole=selectedRole(mainRole);
+            String selectedSecondaryRole=selectedRole(secondaryRole);
+            if(!validateRoleSelection(selectedMainRole,selectedSecondaryRole)) return;
             base.modelName=val(model);
             base.brand=val(brand);
             base.referenceNo=val(reference);
             base.movement=String.valueOf(power.getSelectedItem());
+            base.mainRole=selectedMainRole;
+            base.secondaryRole=selectedSecondaryRole;
             base.caliber=val(caliber);
             base.diameterMm=val(diameter);
             base.lugToLugMm=val(l2l);
@@ -1515,6 +1729,8 @@ public class MainActivity extends Activity {
         body.addView(UiKit.text(this,wish.modelName,22,true));
         if(!wish.referenceNo.isEmpty()) body.addView(UiKit.muted(this,"Ref. "+wish.referenceNo,11));
         body.addView(UiKit.spacer(this,8));
+        if(!normalizeRole(wish.mainRole).isEmpty()) body.addView(detailSpecRow("Main Role",normalizeRole(wish.mainRole)));
+        if(!normalizeRole(wish.secondaryRole).isEmpty()) body.addView(detailSpecRow("Secondary Role",normalizeRole(wish.secondaryRole)));
         if(!wish.priority.isEmpty()) body.addView(detailSpecRow("우선순위",wish.priority));
         if(!wish.targetPrice.isEmpty()) body.addView(detailSpecRow("목표 구매가격",formatWon(wish.targetPrice)));
         if(!wish.targetPurchaseDate.isEmpty()) body.addView(detailSpecRow("목표 구매일",wish.targetPurchaseDate));
@@ -1634,19 +1850,37 @@ public class MainActivity extends Activity {
         dialog.show();
     }
 
+    private String getWishMembershipSignature() {
+        List<Long> wishIds=new ArrayList<>();
+        for(WishWatch wish:db.getWishWatches()) wishIds.add(wish.id);
+        Collections.sort(wishIds);
+        List<Long> releaseIds=new ArrayList<>(db.getWishReleaseCandidateIds());
+        Collections.sort(releaseIds);
+        return getCurrentCollectionMembershipSignature(db.getWatches())+"|wish="+wishIds+"|release="+releaseIds;
+    }
+
     private String getWishCollectionSignature() {
-        List<String> parts=new ArrayList<>();
-        List<Long> currentIds=new ArrayList<>();
-        for(Watch watch:db.getWatches()) currentIds.add(watch.id);
-        Collections.sort(currentIds);
-        parts.add("current="+currentIds.toString());
-        for(WishWatch wish:db.getWishWatches()) {
-            parts.add("wish="+wish.id+":"+wish.replaceWatchId+":"+wish.modelName+":"+wish.referenceNo);
+        StringBuilder raw=new StringBuilder();
+        raw.append(EVALUATION_SIGNATURE_VERSION).append("|wish|")
+                .append(getCurrentCollectionSignature(db.getWatches())).append('|');
+        List<WishWatch> wishes=new ArrayList<>(db.getWishWatches());
+        wishes.sort((a,b)->Long.compare(a.id,b.id));
+        for(WishWatch wish:wishes) {
+            raw.append(wish.id).append('~').append(wish.replaceWatchId).append('~')
+                    .append(safeText(wish.brand)).append('~').append(safeText(wish.modelName)).append('~')
+                    .append(safeText(wish.referenceNo)).append('~').append(normalizePower(wish.movement)).append('~')
+                    .append(safeText(wish.caliber)).append('~').append(safeText(wish.diameterMm)).append('~')
+                    .append(safeText(wish.lugToLugMm)).append('~').append(safeText(wish.thicknessMm)).append('~')
+                    .append(safeText(wish.lugWidthMm)).append('~').append(safeText(wish.powerReserveHours)).append('~')
+                    .append(safeText(wish.waterResistance)).append('~').append(safeText(wish.caseMaterial)).append('~')
+                    .append(normalizeRole(wish.mainRole)).append('~').append(normalizeRole(wish.secondaryRole)).append('~')
+                    .append(safeText(wish.priority)).append('~').append(safeText(wish.targetPrice)).append('~')
+                    .append(safeText(wish.targetPurchaseDate)).append('~').append(safeText(wish.notes)).append('|');
         }
         List<Long> releases=new ArrayList<>(db.getWishReleaseCandidateIds());
         Collections.sort(releases);
-        parts.add("release="+releases.toString());
-        return String.join("|",parts);
+        raw.append("release=").append(releases);
+        return CollectionEvaluationProfile.sha256(raw.toString());
     }
 
     private void runWishCollectionEvaluation(String signature) {
@@ -1659,7 +1893,7 @@ public class MainActivity extends Activity {
             showAiSettingsDialog(()->runWishCollectionEvaluation(signature));
             return;
         }
-        TextView progress=UiKit.muted(this,"현재 컬렉션과 Wish 교체 계획을 정리합니다.",12);
+        TextView progress=UiKit.muted(this,"현재 컬렉션, Wish 계획과 개인 평가 프로필을 정리합니다.",12);
         progress.setPadding(UiKit.dp(this,18),UiKit.dp(this,14),UiKit.dp(this,18),UiKit.dp(this,14));
         AlertDialog loading=new AlertDialog.Builder(this)
                 .setTitle("Wish 컬렉션 평가")
@@ -1673,9 +1907,10 @@ public class MainActivity extends Activity {
                 AiBackendClient.CollectionEvaluationResult result=AiBackendClient.evaluateCollection(
                         this,"wish",buildCurrentCollectionEvaluationPayload(db.getWatches()),
                         buildWishCollectionEvaluationPayload(wishes),buildWishReleaseEvaluationPayload(),
+                        CollectionEvaluationProfile.load(this).toJson(),
                         message->runOnUiThread(()->progress.setText(message)));
                 db.saveCollectionEvaluation("wish",result.overallScore,result.summary,
-                        serializeEvaluationMetrics(result.metrics),signature);
+                        serializeEvaluationMetrics(result.metrics),signature,getWishMembershipSignature());
                 runOnUiThread(()->{
                     if(loading.isShowing()) loading.dismiss();
                     showWishlist();
@@ -1715,8 +1950,11 @@ public class MainActivity extends Activity {
             item.put("power_reserve_hours",wish.powerReserveHours);
             item.put("water_resistance",wish.waterResistance);
             item.put("case_material",wish.caseMaterial);
+            item.put("main_role",normalizeRole(wish.mainRole));
+            item.put("secondary_role",normalizeRole(wish.secondaryRole));
             item.put("priority",wish.priority);
             item.put("target_price",wish.targetPrice);
+            item.put("target_purchase_date",wish.targetPurchaseDate);
             item.put("replace_watch_id",wish.replaceWatchId);
             Watch replacement=wish.replaceWatchId>0?db.getWatch(wish.replaceWatchId):null;
             item.put("replace_watch_name",replacement==null?"":replacement.modelName);
@@ -2249,6 +2487,21 @@ public class MainActivity extends Activity {
         form.addView(UiKit.label(this,"작동방식"));
         Spinner power=powerSpinner(base.movement);
         form.addView(power);
+
+        LinearLayout roleRow=UiKit.row(this);
+        LinearLayout mainRoleBox=UiKit.column(this);
+        mainRoleBox.addView(UiKit.label(this,"Main Role *"));
+        Spinner mainRole=roleSpinner(base.mainRole,"미지정");
+        mainRoleBox.addView(mainRole);
+        roleRow.addView(mainRoleBox,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
+        LinearLayout secondaryRoleBox=UiKit.column(this);
+        secondaryRoleBox.setPadding(UiKit.dp(this,8),0,0,0);
+        secondaryRoleBox.addView(UiKit.label(this,"Secondary Role"));
+        Spinner secondaryRole=roleSpinner(base.secondaryRole,"없음");
+        secondaryRoleBox.addView(secondaryRole);
+        roleRow.addView(secondaryRoleBox,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
+        form.addView(roleRow);
+
         EditText caliber=addField(form,"무브먼트","예: H-10 / 6R54 / E168",base.caliber);
         EditText diameter=addField(form,"Diameter (mm)","38",base.diameterMm);
         EditText l2l=addField(form,"Lug-to-lug (mm)","44.7",base.lugToLugMm);
@@ -2353,7 +2606,11 @@ public class MainActivity extends Activity {
 
         dlg.setOnShowListener(x->dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
             if(val(model).isEmpty()){model.setError("모델명은 필수입니다.");return;}
+            String selectedMainRole=selectedRole(mainRole);
+            String selectedSecondaryRole=selectedRole(secondaryRole);
+            if(!validateRoleSelection(selectedMainRole,selectedSecondaryRole)) return;
             base.modelName=val(model); base.brand=val(brand); base.referenceNo=val(ref); base.movement=String.valueOf(power.getSelectedItem());
+            base.mainRole=selectedMainRole; base.secondaryRole=selectedSecondaryRole;
             base.caliber=val(caliber); base.diameterMm=val(diameter); base.lugToLugMm=val(l2l); base.thicknessMm=val(thickness);
             base.lugWidthMm=val(lug); base.powerReserveHours=val(pr); base.waterResistance=val(water); base.crystal=val(crystal);
             base.caseMaterial=val(material); base.purchaseDate=val(purchaseDate); String warrantyValue=val(warranty); base.warrantyEndDate=warrantyValue.startsWith("~")?warrantyValue.substring(1):warrantyValue; base.purchasePrice=val(purchasePrice); base.sourceUrls=val(sources); base.notes=val(notes);
@@ -3938,6 +4195,8 @@ public class MainActivity extends Activity {
         item.put("case_material",watch.caseMaterial);
         item.put("water_resistance",watch.waterResistance);
         item.put("lug_width_mm",parseLugWidth(watch.lugWidthMm));
+        item.put("main_role",normalizeRole(watch.mainRole));
+        item.put("secondary_role",normalizeRole(watch.secondaryRole));
         item.put("notes",watch.notes);
         return item;
     }
@@ -5635,6 +5894,16 @@ public class MainActivity extends Activity {
         }
         body.addView(hero);
 
+        LinearLayout roleSection=detailSection("ROLE");
+        String mainRole=normalizeRole(w.mainRole);
+        String secondaryRole=normalizeRole(w.secondaryRole);
+        roleSection.addView(detailSpecRow("Main Role",mainRole.isEmpty()?"미지정":mainRole));
+        if(!secondaryRole.isEmpty()) roleSection.addView(detailSpecRow("Secondary Role",secondaryRole));
+        Button setRole=UiKit.secondaryButton(this,"역할 설정");
+        roleSection.addView(UiKit.spacer(this,6));
+        roleSection.addView(setRole);
+        body.addView(roleSection);
+
         String power=normalizePower(w.movement);
         if(!power.isEmpty()||!w.caliber.isEmpty()||!w.powerReserveHours.isEmpty()) {
             LinearLayout essential=detailSection("ESSENTIAL");
@@ -5766,6 +6035,10 @@ public class MainActivity extends Activity {
                 .setView(scroll)
                 .setPositiveButton("닫기",null)
                 .create();
+        setRole.setOnClickListener(v->{
+            if(detailDialog[0]!=null) detailDialog[0].dismiss();
+            showWatchRoleDialog(w);
+        });
         addRepair.setOnClickListener(v->showRepairDialog(w,()->{
             if(detailDialog[0]!=null) detailDialog[0].dismiss();
             Watch fresh=db.getWatch(w.id);
@@ -5784,6 +6057,39 @@ public class MainActivity extends Activity {
             confirmDeleteWatch(w);
         });
         detailDialog[0].show();
+    }
+
+    private void showWatchRoleDialog(Watch watch) {
+        if(watch==null) return;
+        LinearLayout form=UiKit.column(this);
+        form.setPadding(UiKit.dp(this,18),UiKit.dp(this,8),UiKit.dp(this,18),UiKit.dp(this,12));
+        form.addView(UiKit.label(this,"Main Role *"));
+        Spinner mainRole=roleSpinner(watch.mainRole,"미지정");
+        form.addView(mainRole);
+        form.addView(UiKit.label(this,"Secondary Role"));
+        Spinner secondaryRole=roleSpinner(watch.secondaryRole,"없음");
+        form.addView(secondaryRole);
+
+        AlertDialog dialog=new AlertDialog.Builder(this)
+                .setTitle("역할 설정")
+                .setView(form)
+                .setNegativeButton("취소",null)
+                .setPositiveButton("저장",null)
+                .create();
+        dialog.setOnShowListener(x->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            String main=selectedRole(mainRole);
+            String secondary=selectedRole(secondaryRole);
+            if(!validateRoleSelection(main,secondary)) return;
+            watch.mainRole=main;
+            watch.secondaryRole=secondary;
+            db.saveWatch(watch);
+            dialog.dismiss();
+            focusedWatchId=watch.id;
+            showCollection();
+            Watch fresh=db.getWatch(watch.id);
+            if(fresh!=null) showWatchDetailPopup(fresh);
+        }));
+        dialog.show();
     }
 
     private void openHeritageEntryFromWatchDetails(long entryId) {
@@ -6392,6 +6698,52 @@ public class MainActivity extends Activity {
         if(x.contains("manual")||x.contains("hand-wound")||x.contains("hand wound")||x.contains("mechanical")||x.contains("handwind")) return "Mechanical";
         if("solar-quartz".equalsIgnoreCase(raw)||"solar quartz".equalsIgnoreCase(raw)) return "Solar-Quartz";
         return raw;
+    }
+
+    private Spinner roleSpinner(String current,String emptyLabel) {
+        Spinner spinner=new Spinner(this);
+        List<String> items=new ArrayList<>();
+        items.add(emptyLabel);
+        Collections.addAll(items,WATCH_ROLES);
+        spinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,items));
+        decorateSpinner(spinner);
+        String normalized=normalizeRole(current);
+        for(int i=1;i<items.size();i++) {
+            if(items.get(i).equals(normalized)) { spinner.setSelection(i); break; }
+        }
+        return spinner;
+    }
+
+    private String selectedRole(Spinner spinner) {
+        if(spinner==null||spinner.getSelectedItemPosition()<=0) return "";
+        return normalizeRole(String.valueOf(spinner.getSelectedItem()));
+    }
+
+    private String normalizeRole(String raw) {
+        String value=safeText(raw).trim();
+        for(String role:WATCH_ROLES) if(role.equalsIgnoreCase(value)) return role;
+        return "";
+    }
+
+    private boolean validateRoleSelection(String mainRole,String secondaryRole) {
+        String main=normalizeRole(mainRole);
+        String secondary=normalizeRole(secondaryRole);
+        if(main.isEmpty()) {
+            Toast.makeText(this,"메인 역할을 선택하세요.",Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        if(!main.isEmpty()&&main.equals(secondary)) {
+            Toast.makeText(this,"메인 역할과 보조 역할은 다르게 선택하세요.",Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        return true;
+    }
+
+    private String roleSummary(String mainRole,String secondaryRole) {
+        String main=normalizeRole(mainRole);
+        String secondary=normalizeRole(secondaryRole);
+        if(main.isEmpty()) return "";
+        return secondary.isEmpty()?main:main+" · "+secondary;
     }
 
     private void setIf(EditText e,String value) { if(value!=null&&!value.isEmpty()) e.setText(value); }
