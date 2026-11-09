@@ -66,11 +66,17 @@ public final class ImageLoader {
         public final String originalPath;
         public final String displayPath;
         public final boolean backgroundChanged;
+        public final boolean usedMlSegmentation;
+        public final double foregroundRatio;
 
-        CasebackImageImportResult(String originalPath, String displayPath, boolean backgroundChanged) {
+        CasebackImageImportResult(String originalPath, String displayPath,
+                                  boolean backgroundChanged, boolean usedMlSegmentation,
+                                  double foregroundRatio) {
             this.originalPath = originalPath;
             this.displayPath = displayPath;
             this.backgroundChanged = backgroundChanged;
+            this.usedMlSegmentation = usedMlSegmentation;
+            this.foregroundRatio = foregroundRatio;
         }
     }
 
@@ -306,8 +312,9 @@ public final class ImageLoader {
     }
 
     /**
-     * 케이스백 사진은 EXIF 방향을 픽셀에 반영한 원본을 별도 저장하고,
-     * 대표 시계 사진과 동일한 #FCFBF7 배경으로 정리한 표시용 PNG를 생성합니다.
+     * 케이스백 사진은 EXIF 방향을 픽셀에 반영한 원본을 별도 저장합니다.
+     * 표시용 이미지는 케이스백 전용 객체 분리기를 사용해 배경을 제거하고,
+     * 앱 사진 배경색(#FCFBF7) 위에 중앙 정렬합니다.
      */
     public static CasebackImageImportResult importCasebackUriNormalized(Context context, Uri uri) throws Exception {
         Bitmap oriented = decodeUriRespectingExif(context, uri, DISPLAY_MAX_SIDE);
@@ -317,10 +324,15 @@ public final class ImageLoader {
         originalDir.mkdirs();
         File originalFile = new File(originalDir,
                 String.format(Locale.ROOT, "caseback_original_%d.png", System.currentTimeMillis()));
-        try (FileOutputStream out = new FileOutputStream(originalFile)) {
-            if (!oriented.compress(Bitmap.CompressFormat.PNG, 100, out)) {
-                throw new IllegalStateException("케이스백 원본 저장에 실패했습니다.");
+
+        CasebackBackgroundProcessor.Result result = null;
+        try {
+            try (FileOutputStream out = new FileOutputStream(originalFile)) {
+                if (!oriented.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                    throw new IllegalStateException("케이스백 원본 저장에 실패했습니다.");
+                }
             }
+            result = CasebackBackgroundProcessor.process(oriented);
         } finally {
             oriented.recycle();
         }
@@ -330,15 +342,22 @@ public final class ImageLoader {
         File displayFile = new File(displayDir,
                 String.format(Locale.ROOT, "caseback_%d_bg.png", System.currentTimeMillis()));
 
-        BackgroundNormalizer.Result result = BackgroundNormalizer.normalize(originalFile);
         String displayPath = originalFile.getAbsolutePath();
         boolean changed = false;
-        if (result.bitmap != null && result.changed && BackgroundNormalizer.savePng(result.bitmap, displayFile)) {
-            displayPath = displayFile.getAbsolutePath();
-            changed = true;
+        boolean usedMl = false;
+        double foregroundRatio = 0.0;
+        if (result != null) {
+            usedMl = result.usedMl;
+            foregroundRatio = result.foregroundRatio;
+            if (result.bitmap != null && result.changed
+                    && BackgroundNormalizer.savePng(result.bitmap, displayFile)) {
+                displayPath = displayFile.getAbsolutePath();
+                changed = true;
+            }
+            if (result.bitmap != null) result.bitmap.recycle();
         }
-        if (result.bitmap != null) result.bitmap.recycle();
-        return new CasebackImageImportResult(originalFile.getAbsolutePath(), displayPath, changed);
+        return new CasebackImageImportResult(
+                originalFile.getAbsolutePath(), displayPath, changed, usedMl, foregroundRatio);
     }
 
     public static CollectionPhotoImportResult importCollectionPhoto(Context context, Uri uri) throws Exception {

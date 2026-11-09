@@ -1,6 +1,17 @@
-# Watch Collection v1.31.1
+# Watch Collection v1.31.2
 
 개인 시계 컬렉션, 위시리스트, 착용 캘린더, 오차·파워리저브 측정, 스트랩, 수리 이력, 헤리티지와 컬렉션 사진을 관리하는 Android 앱입니다.
+
+## v1.31.2 주요 변경
+
+### 케이스백 배경 제거
+- 대표사진용 단순 모서리 flood-fill 대신 케이스백 전용 피사체 분리기를 사용합니다.
+- ML Kit Subject Segmentation을 먼저 적용하고, 인식 실패 시 다중 모서리 색상·경계 연결성 기반 로컬 분리기로 자동 전환합니다.
+- 금속 반사로 생기는 작은 마스크 누락과 회색 halo를 보정합니다.
+- 분리된 케이스백을 앱 사진 배경색 위 정사각형 캔버스 중앙에 배치합니다.
+- 분리 신뢰도가 낮으면 케이스백을 잘못 잘라내지 않고 방향만 보정한 원본을 유지합니다.
+- 기존 Cloudflare Worker와 환경변수는 변경하지 않습니다.
+- 기존에 저장된 케이스백은 자동으로 덮어쓰지 않으므로, 새 분리기를 적용하려면 편집 화면에서 같은 사진을 다시 선택합니다.
 
 ## v1.31.1 주요 변경
 
@@ -65,13 +76,14 @@
 ## 적용 순서
 1. v1.31 Worker를 이미 배포했다면 Cloudflare Worker는 다시 수정할 필요가 없습니다.
 2. `.github/workflows/build-apk.yml`을 이용해 GitHub Actions에서 APK를 빌드합니다.
-3. 기존 앱 위에 v1.31.1 APK를 설치하면 DB와 기존 데이터가 유지됩니다.
+3. 기존 앱 위에 v1.31.2 APK를 설치하면 DB와 기존 데이터가 유지됩니다.
 
 ## 빌드 결과
 GitHub Actions Artifact 이름:
 
 ```text
-WatchCollection-v1.31.1-debug-apk
+WatchCollection-v1.31.2-debug-apk
 ```
 
 AI 연결과 Cloudflare 설정은 `README_AI_SETUP_KO.md`를 참고합니다.
+

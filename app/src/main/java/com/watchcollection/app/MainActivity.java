@@ -5220,7 +5220,7 @@ public class MainActivity extends Activity {
                 pendingCasebackImageProcessing=true;
                 if(pendingCasebackPhotoStatus!=null) {
                     pendingCasebackPhotoStatus.setVisibility(View.VISIBLE);
-                    pendingCasebackPhotoStatus.setText("케이스백 배경을 정리하는 중…");
+                    pendingCasebackPhotoStatus.setText("케이스백을 인식해 배경을 제거하는 중…");
                 }
             }
             executor.execute(()->{
@@ -5242,9 +5242,14 @@ public class MainActivity extends Activity {
                             if(pendingCasebackPreview!=null) ImageLoader.loadFit(this,pendingCasebackPreview,pendingCasebackProcessedPath);
                             if(pendingCasebackPhotoStatus!=null) {
                                 pendingCasebackPhotoStatus.setVisibility(View.VISIBLE);
-                                pendingCasebackPhotoStatus.setText(result.backgroundChanged
-                                        ? "케이스백 배경을 대표사진과 같은 색으로 통일했습니다."
-                                        : "복잡한 배경으로 판단되어 방향만 보정하고 원본을 유지했습니다.");
+                                if(result.backgroundChanged) {
+                                    pendingCasebackPhotoStatus.setText(result.usedMlSegmentation
+                                            ? "케이스백을 자동 인식해 배경을 제거하고 중앙 정렬했습니다."
+                                            : "케이스백 배경을 정리하고 중앙 정렬했습니다.");
+                                } else {
+                                    pendingCasebackPhotoStatus.setText(
+                                            "피사체 분리 신뢰도가 낮아 방향만 보정하고 원본을 유지했습니다.");
+                                }
                             }
                         }
                     });
