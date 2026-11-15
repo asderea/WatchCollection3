@@ -10,8 +10,8 @@ android {
         applicationId 'com.watchcollection.app'
         minSdk 26
         targetSdk 36
-        versionCode 42
-        versionName '1.32.0'
+        versionCode 44
+        versionName '1.33.1'
     }
 
     // 개인용 debug APK도 매 빌드 같은 키로 서명해 이후 버전을 덮어쓸 수 있게 고정합니다.
@@ -35,4 +35,6 @@ android {
 
 dependencies {
     implementation 'com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1'
+    // Drive에 앱이 만든 파일만 저장하는 사용자 동의 흐름에 사용합니다.
+    implementation 'com.google.android.gms:play-services-auth:22.0.0'
 }

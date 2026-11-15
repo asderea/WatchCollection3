@@ -1,0 +1,27 @@
+Watch Collection v1.33.1 검증 기록
+기준 소스: WatchCollection_v1.33_source.zip
+
+[기능]
+- 기존 헤리티지 기록 상세 팝업의 수정 버튼 추가
+- 기존 값(날짜, 시계, 제목, 내용, 사진)으로 편집창 초기화
+- 기존 사진 개별 제거, 신규 사진 추가, 취소 시 기존 데이터 유지
+- 기존 기록 ID/생성 시각 보존 + DB 트랜잭션으로 사진 정보 원자적 갱신
+- 실패 시 트랜잭션 롤백, 기존 사진 원본 파일 보존
+- 사진 가져오기 완료 전 저장 차단 및 늦게 종료된 작업 정리
+
+[실행한 테스트]
+PASS: python3 tests/test_java_syntax.py — 전체 Java 소스 JavacTask.parse 구문 검사
+PASS: python3 tests/test_heritage_edit.py — 실제 updateHeritageEntry Java 메서드 JVM 회귀 검사
+PASS: 신규 사진 추가, 기존 사진 일부 유지/제거, ID/생성 시각 보존, 타 기록 불변
+PASS: 사진 추가 실패 시 DB 롤백 및 기존 사진 파일 삭제 방지
+PASS: UI 수정 버튼 → 편집창, 기존 입력값 복원, 취소·가져오기 작업 보호 정적 검사
+PASS: python3 tests/test_monthly_wear_ranking.py — v1.33의 월간 착용 순위 회귀 검사
+
+[버전/서명]
+versionName 1.33.1 / versionCode 44 / DB_SCHEMA 17 유지
+서명 파일 app/watchcollection-debug.keystore는 v1.33에서 변경하지 않음
+
+[수행하지 못한 검증]
+Android SDK/Gradle 부재로 실제 Android :app:assembleDebug 빌드 미수행
+실제 Android 기기에서 터치·사진 추가·수정·Google Drive 연동 미검증
+실제 APK를 생성했다는 주장은 하지 않음

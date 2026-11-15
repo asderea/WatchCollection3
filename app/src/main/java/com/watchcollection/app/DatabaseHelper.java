@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -985,6 +986,83 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         v.put("display_order", displayOrder);
         v.put("created_at", System.currentTimeMillis());
         return getWritableDatabase().insert("heritage_photos", null, v);
+    }
+
+    /**
+     * 저장된 헤리티지의 ID/생성 시각을 보존하면서 내용과 사진 구성을 원자적으로 수정합니다.
+     * 기존 사진 파일은 저장이 성공한 후에만 삭제하므로 취소/실패 시 원본이 유지됩니다.
+     */
+    public boolean updateHeritageEntry(long entryId, String eventDate, long watchId,
+                                       String watchName, String watchImage, String title,
+                                       String content, List<Long> keptPhotoIds,
+                                       List<String> newPhotoPaths) {
+        if (entryId <= 0) return false;
+
+        Set<Long> keepIds = new HashSet<>();
+        if (keptPhotoIds != null) keepIds.addAll(keptPhotoIds);
+        List<String> discardedPhotoPaths = new ArrayList<>();
+        SQLiteDatabase database = getWritableDatabase();
+        boolean saved = false;
+
+        database.beginTransaction();
+        try {
+            ContentValues values = new ContentValues();
+            values.put("event_date", eventDate == null ? "" : eventDate);
+            values.put("watch_id", Math.max(0, watchId));
+            values.put("watch_name_snapshot", watchName == null ? "" : watchName.trim());
+            values.put("watch_image_snapshot", watchImage == null ? "" : watchImage.trim());
+            values.put("title", title == null ? "" : title);
+            values.put("content", content == null ? "" : content);
+            String[] args = {String.valueOf(entryId)};
+            if (database.update("heritage_entries", values, "id=?", args) != 1) return false;
+
+            // 남길 사진의 기존 ID는 그대로 사용하고, 제거할 사진만 DB에서 삭제합니다.
+            Cursor photos = database.rawQuery(
+                    "SELECT id,image_path FROM heritage_photos WHERE entry_id=? ORDER BY display_order,id",
+                    args);
+            List<Long> existingIds = new ArrayList<>();
+            List<String> existingPaths = new ArrayList<>();
+            try {
+                while (photos.moveToNext()) {
+                    existingIds.add(photos.getLong(0));
+                    existingPaths.add(photos.getString(1));
+                }
+            } finally { photos.close(); }
+
+            int order = 0;
+            for (int i = 0; i < existingIds.size(); i++) {
+                long photoId = existingIds.get(i);
+                String[] photoArgs = {String.valueOf(photoId), String.valueOf(entryId)};
+                if (keepIds.contains(photoId)) {
+                    ContentValues photoOrder = new ContentValues();
+                    photoOrder.put("display_order", order++);
+                    database.update("heritage_photos", photoOrder, "id=? AND entry_id=?", photoArgs);
+                } else {
+                    discardedPhotoPaths.add(existingPaths.get(i));
+                    database.delete("heritage_photos", "id=? AND entry_id=?", photoArgs);
+                }
+            }
+
+            // 새로운 사진은 뒤에 추가하고, 기존 사진의 저장 경로는 건드리지 않습니다.
+            if (newPhotoPaths != null) {
+                for (String path : newPhotoPaths) {
+                    if (path == null || path.trim().isEmpty()) continue;
+                    ContentValues newPhoto = new ContentValues();
+                    newPhoto.put("entry_id", entryId);
+                    newPhoto.put("image_path", path);
+                    newPhoto.put("display_order", order++);
+                    newPhoto.put("created_at", System.currentTimeMillis());
+                    database.insertOrThrow("heritage_photos", null, newPhoto);
+                }
+            }
+            database.setTransactionSuccessful();
+            saved = true;
+        } finally { database.endTransaction(); }
+
+        if (saved) {
+            for (String path : discardedPhotoPaths) deleteInternalFile(path);
+        }
+        return saved;
     }
 
     public List<HeritageEntryRow> getHeritageEntries() {

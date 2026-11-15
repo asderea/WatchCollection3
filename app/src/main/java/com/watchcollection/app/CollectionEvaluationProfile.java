@@ -10,7 +10,7 @@ import java.security.MessageDigest;
 
 /**
  * 컬렉션 AI 평가에 함께 전달하는 사용자 맞춤 프로필입니다.
- * 앱 안에서만 저장되며 컬렉션 평가를 실행할 때에만 Worker로 전송됩니다.
+ * 기기에 저장되며 컬렉션 평가 시 Worker로, 사용자가 연결한 Drive 동기화 시 개인 문서로 전달됩니다.
  */
 public class CollectionEvaluationProfile {
     private static final String PREFS = "collection_evaluation_profile";

@@ -57,6 +57,7 @@ import org.json.JSONObject;
 
 public class MainActivity extends Activity {
     private DatabaseHelper db;
+    private DriveSyncController driveSync;
     private FrameLayout content;
     private Button navCollection, navAccuracy, navCalendar, navStraps;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -119,8 +120,11 @@ public class MainActivity extends Activity {
     private String pendingWearPhotoWatchName = "";
 
     private final List<String> pendingHeritagePhotoPaths = new ArrayList<>();
+    private final List<DatabaseHelper.HeritagePhotoRow> pendingHeritageExistingPhotos = new ArrayList<>();
     private LinearLayout pendingHeritagePhotoPreview;
     private boolean pendingHeritageSaved = false;
+    private int pendingHeritagePhotoImportJobs = 0;
+    private int heritageEditorSession = 0;
     private String heritageMonthFilter = "";
 
     private Uri pendingWishImageUri;
@@ -162,6 +166,7 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         db = new DatabaseHelper(this);
+        driveSync = new DriveSyncController(this);
         visibleMonth.set(Calendar.DAY_OF_MONTH, 1);
         buildShell();
         requestNotificationPermissionIfNeeded();
@@ -307,6 +312,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        if (driveSync != null) driveSync.onResume();
         if (pendingWatchAccuracyMeterImport) {
             pendingWatchAccuracyMeterImport = false;
             final long watchId = pendingWatchAccuracyMeterWatchId;
@@ -318,7 +324,13 @@ public class MainActivity extends Activity {
         refreshApiCreditUsage(false);
     }
 
+    @Override protected void onPause() {
+        if (driveSync != null) driveSync.onPause();
+        super.onPause();
+    }
+
     @Override protected void onDestroy() {
+        if (driveSync != null) driveSync.close();
         executor.shutdownNow();
         db.close();
         super.onDestroy();
@@ -690,6 +702,11 @@ public class MainActivity extends Activity {
             managementActions.addView(totalPrice,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
             p.addView(managementActions);
         }
+        p.addView(UiKit.spacer(this,12));
+        Button drive=UiKit.secondaryButton(this,"Google Drive 연동");
+        drive.setOnClickListener(v->driveSync.showDialog());
+        p.addView(drive,new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));
         setScrollable(p);
         if(!allWatches.isEmpty()) maybeEvaluateCurrentCollection(allWatches);
     }
@@ -1078,19 +1095,26 @@ public class MainActivity extends Activity {
 
     private View monthlyWearSummary() {
         String start=currentMonthStart(), end=currentMonthEnd();
-        Map<Long,Double> counts=db.getWearScores(start,end);
+        // 방출된 시계도 저장된 이름으로 표시하여 페이지 중간의 순위가 빠지지 않도록 합니다.
+        List<DatabaseHelper.WearStat> stats=db.getTopWorn(start,end,Integer.MAX_VALUE);
+        // 점수와 이름이 같은 시계도 페이지를 넘길 때 순서가 바뀌지 않도록 ID로 정렬합니다.
+        stats.sort((a,b)->{
+            int scoreOrder=Double.compare(b.score,a.score);
+            if(scoreOrder!=0) return scoreOrder;
+            int nameOrder=safeText(a.watchName).compareTo(safeText(b.watchName));
+            return nameOrder!=0?nameOrder:Long.compare(a.watchId,b.watchId);
+        });
         LinearLayout card=UiKit.card(this);
         card.addView(UiKit.eyebrow(this,"MONTHLY WEAR"));
         card.addView(UiKit.text(this,monthFormat.format(new Date())+" 착용 순위",17,true));
         card.addView(UiKit.spacer(this,8));
-        if(counts.isEmpty()) {
+        if(stats.isEmpty()) {
             monthlyWearPage=0;
             card.addView(UiKit.muted(this,"이번 달 착용 기록이 아직 없습니다.",12));
             return card;
         }
 
-        List<Map.Entry<Long,Double>> entries=new ArrayList<>(counts.entrySet());
-        int totalPages=Math.max(1,(entries.size()+2)/3);
+        int totalPages=Math.max(1,(stats.size()+2)/3);
         if(monthlyWearPage>=totalPages) monthlyWearPage=totalPages-1;
         if(monthlyWearPage<0) monthlyWearPage=0;
 
@@ -1102,7 +1126,7 @@ public class MainActivity extends Activity {
         prev.setOnClickListener(v->{if(monthlyWearPage>0){monthlyWearPage--;showCollection();}});
         next.setOnClickListener(v->{if(monthlyWearPage<totalPages-1){monthlyWearPage++;showCollection();}});
         int from=monthlyWearPage*3;
-        int to=Math.min(from+3,entries.size());
+        int to=Math.min(from+3,stats.size());
         String pageLabel=to>from?(from+1)+"–"+to+"위":"—";
         TextView page=UiKit.text(this,pageLabel,13,true);
         page.setGravity(Gravity.CENTER);
@@ -1113,21 +1137,25 @@ public class MainActivity extends Activity {
         card.addView(UiKit.spacer(this,6));
 
         for(int i=from;i<to;i++) {
-            Map.Entry<Long,Double> e=entries.get(i);
-            Watch w=db.getWatch(e.getKey());
-            if(w==null) continue;
+            DatabaseHelper.WearStat stat=stats.get(i);
+            Watch w=db.getWatch(stat.watchId);
             LinearLayout row=UiKit.row(this);
             TextView rank=UiKit.text(this,String.valueOf(i+1),12,true);
             rank.setTextColor(UiKit.GOLD);
             rank.setGravity(Gravity.CENTER);
             row.addView(rank,new LinearLayout.LayoutParams(UiKit.dp(this,28),ViewGroup.LayoutParams.WRAP_CONTENT));
-            TextView name=UiKit.text(this,(w.brand.isEmpty()?"":w.brand+" · ")+w.modelName,12,true);
+            String displayName=w==null?stat.watchName:(w.brand.isEmpty()?"":w.brand+" · ")+w.modelName;
+            TextView name=UiKit.text(this,displayName,12,true);
             row.addView(name,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
-            TextView c=UiKit.text(this,formatWearScore(e.getValue()),12,true);
+            TextView c=UiKit.text(this,formatWearScore(stat.score),12,true);
             c.setTextColor(UiKit.GOLD);
             row.addView(c);
             row.setPadding(0,UiKit.dp(this,5),0,UiKit.dp(this,5));
-            row.setOnClickListener(v->showWatchDetailPopup(w));
+            row.setOnClickListener(v->{
+                Watch watch=db.getWatch(stat.watchId);
+                if(watch!=null) showWatchDetailPopup(watch);
+                else Toast.makeText(this,"컬렉션에서 방출된 시계의 착용 기록입니다.",Toast.LENGTH_SHORT).show();
+            });
             card.addView(row);
         }
         return card;
@@ -2150,15 +2178,35 @@ public class MainActivity extends Activity {
     }
 
     private void showHeritageAddDialog() {
+        showHeritageEditorDialog(null);
+    }
+
+    private void showHeritageEditDialog(long entryId) {
+        DatabaseHelper.HeritageEntryRow entry=db.getHeritageEntry(entryId);
+        if(entry==null) {
+            Toast.makeText(this,"수정할 헤리티지 기록을 찾을 수 없습니다.",Toast.LENGTH_SHORT).show();
+            showHeritage();
+            return;
+        }
+        showHeritageEditorDialog(entry);
+    }
+
+    /** 저장된 기록을 전달하면 수정, null을 전달하면 새 기록 추가 화면입니다. */
+    private void showHeritageEditorDialog(DatabaseHelper.HeritageEntryRow existing) {
+        boolean editing=existing!=null;
         List<Watch> watches=db.getWatches();
+        heritageEditorSession++;
         pendingHeritagePhotoPaths.clear();
+        pendingHeritageExistingPhotos.clear();
+        if(editing) pendingHeritageExistingPhotos.addAll(db.getHeritagePhotos(existing.id));
+        pendingHeritagePhotoImportJobs=0;
         pendingHeritageSaved=false;
 
         LinearLayout form=UiKit.column(this);
         form.setPadding(UiKit.dp(this,18),UiKit.dp(this,8),UiKit.dp(this,18),UiKit.dp(this,12));
 
         EditText date=UiKit.field(this,"날짜");
-        date.setText(dateFormat.format(new Date()));
+        date.setText(editing?existing.eventDate:dateFormat.format(new Date()));
         date.setFocusable(false);
         date.setClickable(true);
         date.setOnClickListener(v->pickDate(val(date),date::setText));
@@ -2175,11 +2223,20 @@ public class MainActivity extends Activity {
         watchLabels.add("직접 시계명 입력");
         watch.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,watchLabels));
         decorateSpinner(watch);
-        if(watches.isEmpty()) watch.setSelection(manualWatchIndex);
+        int initialWatchIndex=manualWatchIndex;
+        if(editing&&existing.watchId>0) {
+            for(int i=0;i<watches.size();i++) {
+                if(watches.get(i).id==existing.watchId) { initialWatchIndex=i; break; }
+            }
+        } else if(!editing&&!watches.isEmpty()) {
+            initialWatchIndex=0;
+        }
+        watch.setSelection(initialWatchIndex);
         form.addView(watch);
 
-        EditText manualWatchName=addField(form,"직접 시계명","예: Omega Seamaster 300","");
-        manualWatchName.setVisibility(watches.isEmpty()?View.VISIBLE:View.GONE);
+        EditText manualWatchName=addField(form,"직접 시계명","예: Omega Seamaster 300",
+                editing?existing.watchName:"");
+        manualWatchName.setVisibility(initialWatchIndex==manualWatchIndex?View.VISIBLE:View.GONE);
         watch.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent,View view,int position,long id) {
                 manualWatchName.setVisibility(position==manualWatchIndex?View.VISIBLE:View.GONE);
@@ -2187,14 +2244,16 @@ public class MainActivity extends Activity {
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
 
-        EditText title=addField(form,"제목","예: 첫 기계식 시계, 여행의 동반자","" );
+        EditText title=addField(form,"제목","예: 첫 기계식 시계, 여행의 동반자",
+                editing?existing.title:"");
         form.addView(UiKit.label(this,"내용"));
         EditText content=UiKit.field(this,"헤리티지에 남길 내용을 적어주세요.");
         content.setSingleLine(false);
         content.setMinLines(4);
+        if(editing) content.setText(existing.content);
         form.addView(content);
 
-        Button photo=UiKit.secondaryButton(this,"오착 사진 추가");
+        Button photo=UiKit.secondaryButton(this,"사진 추가");
         photo.setOnClickListener(v->openHeritagePhotoPicker());
         form.addView(photo);
         form.addView(UiKit.spacer(this,7));
@@ -2208,19 +2267,29 @@ public class MainActivity extends Activity {
         ScrollView scroll=new ScrollView(this);
         scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this)
-                .setTitle("헤리티지 추가")
+                .setTitle(editing?"헤리티지 수정":"헤리티지 추가")
                 .setView(scroll)
                 .setNegativeButton("취소",null)
-                .setPositiveButton("저장",null)
+                .setPositiveButton(editing?"변경 저장":"저장",null)
                 .create();
         dialog.setCanceledOnTouchOutside(false);
-        dialog.setOnCancelListener(d->{ if(!pendingHeritageSaved) cleanupPendingHeritagePhotos(); });
+        dialog.setOnDismissListener(d->{
+            // 늦게 돌아오는 사진 가져오기 결과가 닫힌 편집창에 반영되지 않도록 합니다.
+            heritageEditorSession++;
+            if(!pendingHeritageSaved) cleanupPendingHeritagePhotos();
+            pendingHeritagePhotoPaths.clear();
+            pendingHeritageExistingPhotos.clear();
+            pendingHeritagePhotoPreview=null;
+            pendingHeritagePhotoImportJobs=0;
+        });
         dialog.setOnShowListener(x->{
-            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->{
-                cleanupPendingHeritagePhotos();
-                dialog.dismiss();
-            });
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->dialog.dismiss());
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+                if(pendingHeritagePhotoImportJobs>0) {
+                    Toast.makeText(this,"사진 가져오기가 끝나면 저장할 수 있습니다.",Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if(val(date).isEmpty()) { date.setError("날짜를 선택하세요."); return; }
                 if(val(title).isEmpty()) { title.setError("제목은 필수입니다."); return; }
                 int pos=watch.getSelectedItemPosition();
                 Watch selected=pos>=0&&pos<watches.size()?watches.get(pos):null;
@@ -2231,21 +2300,43 @@ public class MainActivity extends Activity {
                 }
 
                 long entryId;
-                if(selected!=null) {
-                    entryId=db.addHeritageEntry(val(date),selected,val(title),val(content));
-                } else {
-                    entryId=db.addHeritageEntry(val(date),0,directName,"",val(title),val(content));
+                try {
+                    if(editing) {
+                        List<Long> retainedPhotoIds=new ArrayList<>();
+                        for(DatabaseHelper.HeritagePhotoRow savedPhoto:pendingHeritageExistingPhotos) {
+                            retainedPhotoIds.add(savedPhoto.id);
+                        }
+                        boolean updated=db.updateHeritageEntry(existing.id,val(date),
+                                selected==null?0:selected.id,
+                                selected==null?directName:selected.modelName,
+                                selected==null?"":selected.representativeImageUrl,
+                                val(title),val(content),retainedPhotoIds,
+                                new ArrayList<>(pendingHeritagePhotoPaths));
+                        entryId=updated?existing.id:-1;
+                    } else if(selected!=null) {
+                        entryId=db.addHeritageEntry(val(date),selected,val(title),val(content));
+                    } else {
+                        entryId=db.addHeritageEntry(val(date),0,directName,"",val(title),val(content));
+                    }
+                    if(entryId>0&&!editing) {
+                        for(int i=0;i<pendingHeritagePhotoPaths.size();i++) {
+                            db.addHeritagePhoto(entryId,pendingHeritagePhotoPaths.get(i),i);
+                        }
+                    }
+                } catch(Exception error) {
+                    Toast.makeText(this,"헤리티지 저장 오류: "+error.getMessage(),Toast.LENGTH_LONG).show();
+                    return;
                 }
                 if(entryId<=0) {
                     Toast.makeText(this,"헤리티지 저장에 실패했습니다.",Toast.LENGTH_SHORT).show();
                     return;
                 }
-                for(int i=0;i<pendingHeritagePhotoPaths.size();i++) {
-                    db.addHeritagePhoto(entryId,pendingHeritagePhotoPaths.get(i),i);
-                }
                 pendingHeritageSaved=true;
                 pendingHeritagePhotoPaths.clear();
                 pendingHeritagePhotoPreview=null;
+                if(editing&&!heritageMonthFilter.isEmpty()&&val(date).length()>=7) {
+                    heritageMonthFilter=val(date).substring(0,7);
+                }
                 dialog.dismiss();
                 showHeritage();
             });
@@ -2264,29 +2355,64 @@ public class MainActivity extends Activity {
     private void refreshPendingHeritagePhotoPreview() {
         if(pendingHeritagePhotoPreview==null) return;
         pendingHeritagePhotoPreview.removeAllViews();
-        if(pendingHeritagePhotoPaths.isEmpty()) {
+        if(pendingHeritageExistingPhotos.isEmpty()&&pendingHeritagePhotoPaths.isEmpty()) {
             pendingHeritagePhotoPreview.addView(UiKit.muted(this,"선택한 사진이 없습니다.",11));
-            return;
         }
-        for(String path:pendingHeritagePhotoPaths) {
-            ImageView image=new ImageView(this);
-            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            image.setBackground(UiKit.rounded(UiKit.PHOTO_BG,Color.TRANSPARENT,10,this));
-            image.setClipToOutline(true);
-            image.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
-            ImageLoader.loadFit(this,image,path);
-            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(UiKit.dp(this,104),UiKit.dp(this,104));
-            lp.setMargins(0,0,UiKit.dp(this,7),0);
-            pendingHeritagePhotoPreview.addView(image,lp);
+        // 편집 중 기존 사진은 DB에 그대로 두고, 저장할 때 제외된 항목만 삭제합니다.
+        for(DatabaseHelper.HeritagePhotoRow existingPhoto:new ArrayList<>(pendingHeritageExistingPhotos)) {
+            addHeritagePhotoThumbnail(existingPhoto.imagePath,()->{
+                pendingHeritageExistingPhotos.remove(existingPhoto);
+                refreshPendingHeritagePhotoPreview();
+            });
         }
+        for(String path:new ArrayList<>(pendingHeritagePhotoPaths)) {
+            addHeritagePhotoThumbnail(path,()->{
+                pendingHeritagePhotoPaths.remove(path);
+                deletePendingHeritagePhotoFile(path);
+                refreshPendingHeritagePhotoPreview();
+            });
+        }
+        if(pendingHeritagePhotoImportJobs>0) {
+            pendingHeritagePhotoPreview.addView(UiKit.muted(this,"  사진 가져오는 중…",11));
+        }
+    }
+
+    private void addHeritagePhotoThumbnail(String path,Runnable removeAction) {
+        FrameLayout frame=new FrameLayout(this);
+        ImageView image=new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setBackground(UiKit.rounded(UiKit.PHOTO_BG,Color.TRANSPARENT,10,this));
+        image.setClipToOutline(true);
+        image.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
+        ImageLoader.loadFit(this,image,path);
+        frame.addView(image,new FrameLayout.LayoutParams(UiKit.dp(this,104),UiKit.dp(this,104)));
+
+        TextView remove=UiKit.text(this,"×",18,true);
+        remove.setContentDescription("이 헤리티지 사진 제거");
+        remove.setTextColor(Color.WHITE);
+        remove.setGravity(Gravity.CENTER);
+        remove.setBackground(UiKit.rounded(Color.rgb(49,58,74),Color.TRANSPARENT,12,this));
+        FrameLayout.LayoutParams closeLp=new FrameLayout.LayoutParams(
+                UiKit.dp(this,26),UiKit.dp(this,26),Gravity.TOP|Gravity.END);
+        closeLp.setMargins(0,UiKit.dp(this,3),UiKit.dp(this,3),0);
+        frame.addView(remove,closeLp);
+        remove.setOnClickListener(v->removeAction.run());
+
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(UiKit.dp(this,104),UiKit.dp(this,104));
+        lp.setMargins(0,0,UiKit.dp(this,7),0);
+        pendingHeritagePhotoPreview.addView(frame,lp);
+    }
+
+    private void deletePendingHeritagePhotoFile(String path) {
+        try {
+            java.io.File file=new java.io.File(path);
+            if(file.exists()&&file.isFile()) file.delete();
+        } catch(Exception ignored) {}
     }
 
     private void cleanupPendingHeritagePhotos() {
         for(String path:pendingHeritagePhotoPaths) {
-            try {
-                java.io.File file=new java.io.File(path);
-                if(file.exists()&&file.isFile()) file.delete();
-            } catch(Exception ignored) {}
+            deletePendingHeritagePhotoFile(path);
         }
         pendingHeritagePhotoPaths.clear();
         pendingHeritagePhotoPreview=null;
@@ -2338,18 +2464,25 @@ public class MainActivity extends Activity {
                 .setTitle("헤리티지")
                 .setView(scroll)
                 .setNegativeButton("삭제",null)
+                .setNeutralButton("수정",null)
                 .setPositiveButton("닫기",null)
                 .create();
-        dialog.setOnShowListener(x->dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->
-                new AlertDialog.Builder(this)
-                        .setTitle("헤리티지 삭제")
-                        .setMessage("이 헤리티지 기록과 사진을 삭제할까요?")
-                        .setNegativeButton("취소",null)
-                        .setPositiveButton("삭제",(d,which)->{
-                            db.deleteHeritageEntry(entryId);
-                            dialog.dismiss();
-                            showHeritage();
-                        }).show()));
+        dialog.setOnShowListener(x->{
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->{
+                dialog.dismiss();
+                showHeritageEditDialog(entryId);
+            });
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->
+                    new AlertDialog.Builder(this)
+                            .setTitle("헤리티지 삭제")
+                            .setMessage("이 헤리티지 기록과 사진을 삭제할까요?")
+                            .setNegativeButton("취소",null)
+                            .setPositiveButton("삭제",(d,which)->{
+                                db.deleteHeritageEntry(entryId);
+                                dialog.dismiss();
+                                showHeritage();
+                            }).show());
+        });
         dialog.show();
     }
 
@@ -5405,6 +5538,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data) {
         super.onActivityResult(requestCode,resultCode,data);
+        if (driveSync != null && driveSync.onActivityResult(requestCode,resultCode,data)) return;
         if(requestCode==REQ_WISH_IMAGE&&resultCode==RESULT_OK&&data!=null&&data.getData()!=null) {
             pendingWishImageUri=data.getData();
             pendingWishImageProcessing=true;
@@ -5447,22 +5581,32 @@ public class MainActivity extends Activity {
                 uris.add(data.getData());
             }
             if(!uris.isEmpty()) {
+                final int session=heritageEditorSession;
+                if(pendingHeritagePhotoPreview==null) return;
+                pendingHeritagePhotoImportJobs++;
+                refreshPendingHeritagePhotoPreview();
                 Toast.makeText(this,"헤리티지 사진을 가져오는 중입니다…",Toast.LENGTH_SHORT).show();
                 executor.execute(()->{
-                    int imported=0;
+                    // 사진 파일 가져오기는 작업 스레드에서, 편집 목록 수정은 UI 스레드에서 수행합니다.
+                    List<String> importedPaths=new ArrayList<>();
                     for(Uri uri:uris) {
                         try {
                             String path=ImageLoader.importWearPhoto(this,uri);
                             if(path!=null&&!path.isEmpty()) {
-                                pendingHeritagePhotoPaths.add(path);
-                                imported++;
+                                importedPaths.add(path);
                             }
                         } catch(Exception ignored) {}
                     }
-                    final int count=imported;
                     runOnUiThread(()->{
+                        // 취소했거나 다른 편집창을 연 경우 파일을 폐기하고 원본 사진은 유지합니다.
+                        if(session!=heritageEditorSession||pendingHeritagePhotoPreview==null) {
+                            for(String path:importedPaths) deletePendingHeritagePhotoFile(path);
+                            return;
+                        }
+                        pendingHeritagePhotoImportJobs=Math.max(0,pendingHeritagePhotoImportJobs-1);
+                        pendingHeritagePhotoPaths.addAll(importedPaths);
                         refreshPendingHeritagePhotoPreview();
-                        Toast.makeText(this,count+"장의 사진을 추가했습니다.",Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this,importedPaths.size()+"장의 사진을 추가했습니다.",Toast.LENGTH_SHORT).show();
                     });
                 });
             }
